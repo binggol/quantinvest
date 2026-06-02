@@ -183,11 +183,32 @@ def _append_dates_to_stock_bin(code: str, new_dates_ymd: list[str]) -> int:
         # legacy stock with no adj.day.bin — caller should do full rebuild
         return -1
 
-    old_max = float(adj_v.max())
-    new_adjs = [float(r.get("adj_factor") or 1.0) for r in rows]
-    overall_max = max(old_max, max(new_adjs))
+    bin_last_idx = start_idx + adj_v.size - 1
+    cal_idx_map = {d: i for i, d in enumerate(cal)}
 
-    # rescale historical bins if new max > old max (rare ex-dividend day)
+    # 各新行按日历位置归位, 只保留比 bin 末尾更新的交易日
+    row_by_idx: dict[int, dict] = {}
+    for row in rows:
+        d_ymd = str(row["trade_date"])
+        d_iso = f"{d_ymd[:4]}-{d_ymd[4:6]}-{d_ymd[6:8]}"
+        ci = cal_idx_map.get(d_iso)
+        if ci is not None and ci > bin_last_idx:
+            row_by_idx[ci] = row
+    if not row_by_idx:
+        return 0
+    newer = sorted(row_by_idx)
+    max_new_idx = newer[-1]
+
+    # 若 [bin_last_idx+1, max_new_idx] 间有缺口 (该股停牌、日历却有交易日),
+    # 简单尾部 append 会让数据与日期错位 -> 返回 -1, 交调用方全量重建 (已正确填充停牌).
+    if len(newer) != (max_new_idx - bin_last_idx):
+        log.info(f"[{code}] append 检测到停牌缺口, 改走全量重建以保证日期对齐")
+        return -1
+
+    old_max = float(adj_v.max())
+    overall_max = max(old_max, max(float(r.get("adj_factor") or 1.0) for r in row_by_idx.values()))
+
+    # 除权日新 adj 超过历史最大值时, 回头按比例缩放历史 qfq (保持前复权口径一致)
     if overall_max > old_max + 1e-9:
         scale = old_max / overall_max
         log.info(f"[{code}] rescaling historical qfq by {scale:.6f} (new adj_factor > old max)")
@@ -196,17 +217,11 @@ def _append_dates_to_stock_bin(code: str, new_dates_ymd: list[str]) -> int:
             if vals.size > 0:
                 _write_bin(code, field, si, vals * scale)
 
-    # build new tail values per field
-    cal_idx_map = {d: i for i, d in enumerate(cal)}
+    # 连续 append 新交易日 (已确认无缺口)
     field_tails: dict[str, list[float]] = {f: [] for f in
         ("open", "close", "high", "low", "volume", "change", "factor", "adj")}
-    new_cal_indices = []
-
-    for row in rows:
-        d_ymd = str(row["trade_date"])
-        d_iso = f"{d_ymd[:4]}-{d_ymd[4:6]}-{d_ymd[6:8]}"
-        idx_in_cal = cal_idx_map[d_iso]
-        new_cal_indices.append(idx_in_cal)
+    for ci in newer:
+        row = row_by_idx[ci]
         adj_now = float(row.get("adj_factor") or 1.0)
         ratio = adj_now / overall_max
         field_tails["open"].append(float(row["open"]) * ratio)
@@ -218,16 +233,14 @@ def _append_dates_to_stock_bin(code: str, new_dates_ymd: list[str]) -> int:
         field_tails["factor"].append(1.0)
         field_tails["adj"].append(adj_now)
 
-    # append to each bin file
     for field, new_vals in field_tails.items():
         si, vals = _read_bin(code, field)
         if vals.size == 0:
             continue
-        # verify contiguity: new_cal_indices should be > si + vals.size - 1
         merged = np.concatenate([vals, np.array(new_vals, dtype="<f4")])
         _write_bin(code, field, si, merged)
 
-    return len(rows)
+    return len(newer)
 
 
 def _full_rebuild_one_stock(code: str) -> dict:
@@ -278,47 +291,44 @@ def _full_rebuild_one_stock(code: str) -> dict:
     sdf["adj_factor"] = sdf.get("adj_factor", pd.Series([1.0] * len(sdf))).fillna(1.0).astype("float32")
     max_adj = float(sdf["adj_factor"].max())
     ratio = sdf["adj_factor"] / max_adj
+    n_trade = len(sdf)
 
     start_idx = int(sdf["cal_idx"].iloc[0])
-    n = len(sdf)
+    last_idx = int(sdf["cal_idx"].iloc[-1])
 
-    field_values = {
+    vol_src = sdf.get("vol", sdf.get("volume", pd.Series([0] * n_trade)))
+    chg_src = sdf.get("pct_chg", pd.Series([0] * n_trade))
+    g = pd.DataFrame({
+        "cal_idx": sdf["cal_idx"].astype(int).values,
         "open":   (sdf["open"] * ratio).astype("float32").values,
         "close":  (sdf["close"] * ratio).astype("float32").values,
         "high":   (sdf["high"] * ratio).astype("float32").values,
         "low":    (sdf["low"] * ratio).astype("float32").values,
-        "volume": sdf.get("vol", sdf.get("volume", pd.Series([0] * n))).astype("float32").values,
-        "change": (sdf.get("pct_chg", pd.Series([0] * n)).astype("float32") / 100.0).values,
-        "factor": np.ones(n, dtype="float32"),
+        "volume": vol_src.astype("float32").values,
+        "change": (chg_src.astype("float32") / 100.0).values,
         "adj":    sdf["adj_factor"].astype("float32").values,
-    }
+    })
+    # !! 关键: qlib bin 假设从 start_idx 起逐日连续. reindex 到 [start_idx, last_idx]
+    # 连续区间, 停牌日前向填充, 否则停牌后所有值与日期错位 (历史复权价全错).
+    g = (g.drop_duplicates("cal_idx", keep="last")
+           .set_index("cal_idx")
+           .reindex(range(start_idx, last_idx + 1)))
+    susp = g["close"].isna()
+    g["close"] = g["close"].ffill()
+    for c in ("open", "high", "low"):       # 停牌日 O=H=L=前一日收盘
+        g[c] = g[c].where(~susp, g["close"])
+    g["adj"] = g["adj"].ffill()
+    g["volume"] = g["volume"].fillna(0.0)
+    g["change"] = g["change"].fillna(0.0)
+    g["factor"] = np.float32(1.0)
 
-    # 注意: cal_idx 可能不连续 (例如该股有停牌日, 那些日子日历有但该股没数据).
-    # qlib bin 格式假设连续, 所以这里需要用日历做"填充" -- 简化: 对于停牌日, 用前一日值填充.
-    # 如果第一日 cal_idx 在中间, start_idx 跳过前面没数据的日期, 是正确的.
-    contiguous_indices = list(range(start_idx, start_idx + (int(sdf["cal_idx"].iloc[-1]) - start_idx) + 1))
-    if len(contiguous_indices) != n:
-        # 填充: 用前一日值. 这是 qlib bin 的常见做法.
-        full_field_values = {f: [] for f in field_values}
-        sdf_by_idx = {int(r["cal_idx"]): r for _, r in sdf.iterrows()}
-        last_vals = {f: 0.0 for f in field_values}
-        for ci in contiguous_indices:
-            if ci in sdf_by_idx:
-                for f in field_values:
-                    arr = field_values[f]
-                    # find original position
-                    pos = list(sdf["cal_idx"].values).index(ci)
-                    last_vals[f] = float(arr[pos])
-            for f in field_values:
-                full_field_values[f].append(last_vals[f])
-        field_values = {f: np.array(v, dtype="float32") for f, v in full_field_values.items()}
+    for field in ("open", "close", "high", "low", "volume", "change", "factor", "adj"):
+        _write_bin(code, field, start_idx, g[field].to_numpy(dtype="<f4"))
 
-    for field, vals in field_values.items():
-        _write_bin(code, field, start_idx, vals)
-
-    last_iso = sdf["trade_date"].iloc[-1].strftime("%Y-%m-%d")
-    first_iso = sdf["trade_date"].iloc[0].strftime("%Y-%m-%d")
-    log.info(f"[{code}] full rebuild done: {n} 天, {first_iso} ~ {last_iso}")
+    n = len(g)
+    first_iso, last_iso = cal[start_idx], cal[last_idx]
+    log.info(f"[{code}] full rebuild done: {n} 天 ({n_trade} 交易 + {n - n_trade} 停牌填充), "
+             f"{first_iso} ~ {last_iso}")
     return {"ok": True, "n_days": n, "first": first_iso, "last": last_iso}
 
 

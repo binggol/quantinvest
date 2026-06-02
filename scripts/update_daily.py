@@ -133,15 +133,28 @@ def build_qlib_bin():
         if sub.empty:
             continue
         start_idx = int(sub["cal_idx"].iloc[0])
+        last_idx = int(sub["cal_idx"].iloc[-1])
+        # !! 关键: qlib bin 格式假设从 start_idx 起逐日连续. 停牌日(全市场在交易、
+        # 该股无数据)必须填充占位, 否则停牌日之后的所有值整体前移、与日期错位.
+        # reindex 到 [start_idx, last_idx] 连续区间, 停牌日前向填充.
+        sub = (sub.drop_duplicates("cal_idx", keep="last")
+                  .set_index("cal_idx")
+                  .reindex(range(start_idx, last_idx + 1)))
+        susp = sub["close"].isna()                 # 停牌日掩码
+        sub["close"] = sub["close"].ffill()
+        for c in ("open", "high", "low"):          # 停牌日 O=H=L=前一日收盘 (平盘)
+            sub[c] = sub[c].where(~susp, sub["close"])
+        sub["adj"] = sub["adj"].ffill()            # 复权因子停牌期间不变
+        sub["volume"] = sub["volume"].fillna(0.0)  # 停牌日无成交
+        sub["change"] = sub["change"].fillna(0.0)
+        sub["factor"] = np.float32(1.0)
         stock_dir = FEATURES_DIR / code
         stock_dir.mkdir(parents=True, exist_ok=True)
         for field in FIELDS:
-            values = sub[field].values.astype("<f")
-            arr = np.hstack([np.float32(start_idx), values]).astype("<f")
+            values = sub[field].to_numpy(dtype="<f4")
+            arr = np.hstack([np.float32(start_idx), values]).astype("<f4")
             (stock_dir / f"{field}.day.bin").write_bytes(arr.tobytes())
-        s = sub["trade_date"].iloc[0].strftime("%Y-%m-%d")
-        e = sub["trade_date"].iloc[-1].strftime("%Y-%m-%d")
-        instruments.append(f"{code}\t{s}\t{e}")
+        instruments.append(f"{code}\t{cals[start_idx]}\t{cals[last_idx]}")
         if i % 500 == 0:
             log.info(f"  wrote {i}/{len(codes)}")
 
