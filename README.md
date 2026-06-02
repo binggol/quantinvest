@@ -91,6 +91,30 @@ docker exec quantinvest python scripts/fetch_financials.py --force
 docker exec quantinvest python -c "import sqlite3,pandas as pd; c=sqlite3.connect('/app/data/financials.db'); print(pd.read_sql('SELECT end_date, COUNT(*) n, COUNT(dt_profit_to_holder) has_profit FROM fina_indicators GROUP BY end_date ORDER BY end_date DESC LIMIT 8', c))"
 ```
 
+## 数据准确性 / 复权 (重要坑)
+
+bin 存**前复权(qfq)**价 + `adj.day.bin` 存真实 `adj_factor`。`load_ohlcv` 按需换算
+hfq / 不复权。验证方法: 不复权价应与 tushare `pro.daily` 完全一致 (见下方核对命令)。
+
+⚠️ **停牌必须填充对齐**: qlib bin 格式假设「从 `start_idx` 起逐日连续」, 即第 i 个值
+对应 `calendar[start_idx + i]`。若某股停牌 (全市场在交易、该股当日无数据), **必须为停牌日
+填充占位行**, 否则停牌日之后的所有值整体前移、与日期错位 —— 表现为**历史复权价错误,
+且越早越离谱, 最近反而正确** (因为错位是从早期缺口累积的)。
+
+填充约定: 停牌日 `O=H=L=C=前一日收盘` (平盘), `volume=change=0`, `adj` 前向填充, `factor=1`。
+三处都要保持一致:
+- `update_daily.py:build_qlib_bin` (每晚全量重建)
+- `app.py:_full_rebuild_one_stock` (按需单股重建)
+- `app.py:_append_dates_to_stock_bin` (看图时增量补数) — 检测到缺口直接返回 -1, 转全量重建
+
+```bash
+# 核对某股不复权价 vs tushare (本机/容器内任意有 token 的环境)
+python -c "import tushare as ts; ts.set_token('<TOKEN>'); print(ts.pro_api().daily(ts_code='300308.SZ', start_date='20260520', end_date='20260602')[['trade_date','open','close','high','low']].to_string())"
+```
+
+历史教训: 中际旭创(300308) 有 169 个停牌日, 旧逻辑未填充导致 2023/2024 前复权价偏 3~4 倍。
+修复后已全量重建 5852 只, 不复权价与 tushare 零误差。
+
 ## 路线图
 
 - [x] **Phase 1** K线浏览 + 搜索 + 每日自动更新
