@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>quantinvest · A股K线</title>
+<link rel="stylesheet" href="/static/style.css"/>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+</head>
+<body>
+<header>
+  <h1>📈 quantinvest</h1>
+  <nav class="topnav">
+    <a href="/" class="active">K线浏览</a>
+    <a href="/screen">选股</a>
+  </nav>
+  <div class="search-wrap">
+    <input id="q" type="text" placeholder="输入代码 / 拼音首字母 / 名称 (如 gzmt, 600519, 茅台)" autocomplete="off"/>
+    <ul id="suggest" class="suggest hidden"></ul>
+  </div>
+  <div class="controls">
+    <label class="ctrl-group">复权:
+      <select id="adjust">
+        <option value="qfq" selected>前复权</option>
+        <option value="hfq">后复权</option>
+        <option value="none">不复权</option>
+      </select>
+    </label>
+    <label class="ctrl-group">区间:
+      <select id="days">
+        <option value="0" selected>全部</option>
+        <option value="60">3 月</option>
+        <option value="120">半年</option>
+        <option value="250">1 年</option>
+        <option value="500">2 年</option>
+        <option value="1250">5 年</option>
+      </select>
+    </label>
+  </div>
+  <div id="meta" class="meta"></div>
+  <div id="freshness" class="freshness hidden"></div>
+</header>
+<main>
+  <div id="chart"></div>
+</main>
+<footer>
+  <span id="status">就绪</span>
+  <span class="spacer"></span>
+  <a href="/api/health" target="_blank">health</a>
+</footer>
+
+<script>
+const $q = document.getElementById("q");
+const $sug = document.getElementById("suggest");
+const $meta = document.getElementById("meta");
+const $status = document.getElementById("status");
+const $adjust = document.getElementById("adjust");
+const $days = document.getElementById("days");
+const chart = echarts.init(document.getElementById("chart"));
+window.addEventListener("resize", () => chart.resize());
+// 容器尺寸变化也触发 resize (F12 打开 / 屏幕分屏 / 窗口拖动)
+if (window.ResizeObserver) {
+  const ro = new ResizeObserver(() => chart.resize());
+  ro.observe(document.getElementById("chart"));
+}
+
+let currentCode = "", currentName = "";
+let currentData = null;        // 保存当前 chart 数据
+let currentIndex = -1;         // 当前高亮的 K 线索引
+$adjust.addEventListener("change", () => { if (currentCode) loadKline(currentCode, currentName); });
+$days.addEventListener("change", () => { if (currentCode) loadKline(currentCode, currentName); });
+
+// 全局键盘监听:
+//   1. ← / →  在 K 线之间移动 (要求 K 线已加载)
+//   2. Home / End  跳到首/末
+//   3. 任意可打印字符 (字母/数字/中文)  自动跳到搜索框并开始搜索
+document.addEventListener("keydown", (e) => {
+  // 如果焦点已经在搜索框, 让浏览器自然处理 (不接管)
+  if (document.activeElement === $q) return;
+  // 其他输入框 (如下拉) 不接管
+  const tag = (document.activeElement && document.activeElement.tagName) || "";
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+  // 修饰键组合 (Ctrl+R 刷新, F5 等) 让浏览器处理
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+  // K 线导航 (要求当前已加载 K 线数据)
+  if (currentData) {
+    if (e.key === "ArrowLeft")  { e.preventDefault(); setIndex(currentIndex - 1); return; }
+    if (e.key === "ArrowRight") { e.preventDefault(); setIndex(currentIndex + 1); return; }
+    if (e.key === "Home")       { e.preventDefault(); setIndex(0); return; }
+    if (e.key === "End")        { e.preventDefault(); setIndex(currentData.dates.length - 1); return; }
+  }
+
+  // 可打印单字符 (英文/数字/中文) → 跳到搜索框开始搜索
+  // e.key.length === 1 排除 "Enter" "Tab" 等命名键
+  if (e.key.length === 1 && /^[A-Za-z0-9一-龥]$/.test(e.key)) {
+    e.preventDefault();
+    $q.value = e.key;       // 替换为新字符 (清掉上次搜索残留)
+    $q.focus();
+    doSearch();
+    return;
+  }
+  // Backspace 也跳到搜索框 (让用户继续编辑)
+  if (e.key === "Backspace") {
+    e.preventDefault();
+    $q.focus();
+    $q.value = $q.value.slice(0, -1);
+    doSearch();
+    return;
+  }
+});
+
+// 鼠标点击 K 线区域 → 定位到该日期 (尝试主图 + 成交量两个 grid + dataZoom 兜底)
+chart.getZr().on("click", (e) => {
+  if (!currentData) return;
+  const n = currentData.dates.length;
+  // 先尝试两个 grid 的精确 convert
+  for (const xi of [0, 1]) {
+    const p = chart.convertFromPixel({ xAxisIndex: xi }, [e.offsetX, e.offsetY]);
+    if (Array.isArray(p) && !isNaN(p[0]) && p[0] >= 0 && p[0] < n) {
+      setIndex(Math.round(p[0]));
+      return;
+    }
+  }
+  // 兜底: 根据 dataZoom 可视范围 + 点击 x 比例反推 dataIndex
+  const opt = chart.getOption();
+  const dz = opt.dataZoom && opt.dataZoom[0];
+  if (!dz || dz.start === undefined) return;
+  const dom = chart.getDom();
+  const rect = dom.getBoundingClientRect();
+  // 主图 grid: left=60, right=20 (跟 drawChart 的 grid 配置一致)
+  const gridLeft = 60, gridRight = 20;
+  const xInChart = e.offsetX - gridLeft;
+  const gridWidth = rect.width - gridLeft - gridRight;
+  if (xInChart < 0 || xInChart > gridWidth) return;
+  const ratioInGrid = xInChart / gridWidth;
+  const visibleStart = (dz.start / 100) * (n - 1);
+  const visibleEnd = (dz.end / 100) * (n - 1);
+  const idx = Math.round(visibleStart + ratioInGrid * (visibleEnd - visibleStart));
+  if (idx >= 0 && idx < n) setIndex(idx);
+});
+// 也监听 ECharts 系列 click (精确捕获点中某根 K 线/某个柱)
+chart.on("click", (params) => {
+  console.log("[echarts click]", params);
+  if (currentData && params && typeof params.dataIndex === "number") {
+    setIndex(params.dataIndex);
+  }
+});
+
+function setIndex(i) {
+  if (!currentData) { console.log("[setIndex] no currentData"); return; }
+  const n = currentData.dates.length;
+  if (i < 0) i = 0;
+  if (i >= n) i = n - 1;
+  currentIndex = i;
+  const dateStr = currentData.dates[i];
+  console.log("[setIndex] i=", i, "date=", dateStr);
+
+  // 显示 tooltip + 十字线 (鼠标离开会消失)
+  chart.dispatchAction({ type: "showTip", seriesIndex: 0, dataIndex: i });
+
+  // 硬覆盖更新 markLine: 读出整个 option, 改第 0 个 series (K线) 的 markLine, 整体 replace
+  const opt = chart.getOption();
+  if (opt.series && opt.series[0]) {
+    opt.series[0].markLine = {
+      symbol: "none", silent: true, animation: false,
+      lineStyle: { color: "#facc15", width: 2, type: "solid", opacity: 0.9 },
+      label: {
+        show: true, position: "insideEndTop", color: "#facc15",
+        formatter: dateStr, fontSize: 12,
+        backgroundColor: "rgba(15,23,42,0.85)", padding: [3, 6], borderRadius: 3,
+      },
+      data: [{ xAxis: dateStr }],
+    };
+    chart.setOption(opt, { notMerge: true });
+  }
+
+  // 若 i 超出当前 dataZoom 可视范围, 平移窗口让它居中
+  const dz = opt.dataZoom && opt.dataZoom[0];
+  if (dz && (dz.start !== undefined)) {
+    const pct = (i / (n - 1)) * 100;
+    const span = dz.end - dz.start;
+    if (pct < dz.start || pct > dz.end) {
+      let newStart = Math.max(0, pct - span / 2);
+      let newEnd = Math.min(100, newStart + span);
+      newStart = newEnd - span;
+      chart.dispatchAction({ type: "dataZoom", start: newStart, end: newEnd });
+    }
+  }
+  updateMetaForIndex(i);
+}
+
+function updateMetaForIndex(i) {
+  if (!currentData) return;
+  const d = currentData;
+  const c = d.close[i], o = d.open[i], h = d.high[i], l = d.low[i], v = d.volume[i];
+  const prev = i > 0 ? d.close[i - 1] : c;
+  const chg = prev ? ((c - prev) / prev * 100) : 0;
+  const sign = chg >= 0 ? "+" : "";
+  const adjLabel = {qfq:"前复权", hfq:"后复权", none:"不复权"}[d.adjust] || d.adjust;
+  let txt = `${d.name || currentName} · ${d.code} · ${d.dates[i]} · ${adjLabel}`;
+  txt += ` | 开 ${o.toFixed(2)} 高 ${h.toFixed(2)} 低 ${l.toFixed(2)} 收 ${c.toFixed(2)}`;
+  txt += ` 涨跌 ${sign}${chg.toFixed(2)}% 量 ${v.toLocaleString()}`;
+  if (d.adjust_requested && d.adjust_requested !== d.adjust) {
+    txt += `  ⚠️ 旧数据无 adj 字段, 已回落为前复权`;
+  }
+  $meta.textContent = txt;
+}
+
+let debTimer = null;
+$q.addEventListener("input", () => {
+  clearTimeout(debTimer);
+  debTimer = setTimeout(doSearch, 120);
+});
+$q.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    const first = $sug.querySelector("li");
+    if (first) first.click();
+  } else if (e.key === "Escape") {
+    $sug.classList.add("hidden");
+  }
+});
+document.addEventListener("click", (e) => {
+  if (!$sug.contains(e.target) && e.target !== $q) $sug.classList.add("hidden");
+});
+
+async function doSearch() {
+  const q = $q.value.trim();
+  if (!q) { $sug.classList.add("hidden"); return; }
+  try {
+    const r = await fetch("/api/search?q=" + encodeURIComponent(q));
+    const j = await r.json();
+    renderSuggest(j.hits || []);
+  } catch (e) {
+    $status.textContent = "搜索失败: " + e.message;
+  }
+}
+
+function renderSuggest(hits) {
+  $sug.innerHTML = "";
+  if (!hits.length) { $sug.classList.add("hidden"); return; }
+  for (const h of hits) {
+    const li = document.createElement("li");
+    li.innerHTML = `<span class="code">${h.code}</span> <span class="name">${h.name}</span> <span class="industry">${h.industry || ""}</span>`;
+    li.addEventListener("click", () => {
+      $sug.classList.add("hidden");
+      $q.value = `${h.name} (${h.code})`;
+      loadKline(h.code, h.name);
+    });
+    $sug.appendChild(li);
+  }
+  $sug.classList.remove("hidden");
+}
+
+async function loadKline(code, name) {
+  currentCode = code; currentName = name;
+  const adjust = $adjust.value;
+  const days = $days.value;
+  $status.textContent = `加载 ${code} (${adjust}) · 正在检查 tushare 是否有新数据...`;
+  try {
+    const r = await fetch(`/api/kline?code=${code}&days=${days}&adjust=${adjust}`);
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || ("HTTP " + r.status));
+    }
+    const d = await r.json();
+    currentData = d;
+    drawChart(d);
+    // 默认定位到最新交易日, 显示其十字线 + tooltip
+    setIndex(d.dates.length - 1);
+    renderFreshness(d.freshness);
+    $status.textContent = "完成 · 键盘 ←/→ 切换日期, Home/End 跳首末";
+  } catch (e) {
+    $status.textContent = "失败: " + e.message;
+  }
+}
+
+function drawChart(d) {
+  // ECharts candlestick expects [open, close, low, high] per row
+  const kdata = d.dates.map((_, i) => [d.open[i], d.close[i], d.low[i], d.high[i]]);
+  const upColor = "#ef4444";
+  const downColor = "#22c55e";
+  chart.setOption({
+    animation: false,
+    tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
+    legend: { data: ["K线", "MA5", "MA10", "MA20", "MA60"], top: 0 },
+    grid: [
+      { left: 60, right: 20, top: 40, height: "60%" },
+      { left: 60, right: 20, top: "75%", height: "18%" },
+    ],
+    xAxis: [
+      { type: "category", data: d.dates, scale: true, boundaryGap: false,
+        axisLine: { onZero: false }, splitLine: { show: false }, axisLabel: { show: false } },
+      { type: "category", gridIndex: 1, data: d.dates, scale: true, boundaryGap: false,
+        axisLine: { onZero: false }, axisTick: { show: false }, splitLine: { show: false } },
+    ],
+    yAxis: [
+      { scale: true, splitArea: { show: true } },
+      { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, axisLine: { show: false },
+        axisTick: { show: false }, splitLine: { show: false } },
+    ],
+    dataZoom: [
+      { type: "inside", xAxisIndex: [0, 1], start: 70, end: 100 },
+      { show: true, xAxisIndex: [0, 1], type: "slider", top: "95%", start: 70, end: 100 },
+    ],
+    series: [
+      { name: "K线", type: "candlestick", data: kdata,
+        itemStyle: { color: upColor, color0: downColor, borderColor: upColor, borderColor0: downColor } },
+      makeMA("MA5", d.close, 5),
+      makeMA("MA10", d.close, 10),
+      makeMA("MA20", d.close, 20),
+      makeMA("MA60", d.close, 60),
+      { name: "Volume", type: "bar", xAxisIndex: 1, yAxisIndex: 1,
+        data: d.volume.map((v, i) => ({ value: v, itemStyle: { color: d.close[i] >= d.open[i] ? upColor : downColor } })) },
+    ],
+  }, true);
+}
+
+function renderFreshness(f) {
+  const $f = document.getElementById("freshness");
+  if (!f) { $f.classList.add("hidden"); return; }
+  const status = f.status || "";
+  const msg = f.message || "";
+  let cls = "info", icon = "ℹ️";
+  if (status === "appended") { cls = "ok"; icon = "✅"; }
+  else if (status === "rebuilt") { cls = "ok"; icon = "🔄"; }
+  else if (status === "up_to_date") { cls = "ok"; icon = "✓"; }
+  else if (status === "stock_not_in_db" || status === "rebuild_failed" || status === "error") { cls = "warn"; icon = "⚠️"; }
+  else if (msg.includes("暂未发布")) { cls = "warn"; icon = "⏳"; }
+
+  let text = `${icon} ${msg || status}`;
+  if (status === "appended" && f.appended_dates) {
+    text += `  (本次补了 ${f.appended_dates} 天 → ${f.bin_last_date})`;
+  } else if (status === "rebuilt") {
+    text += `  (重建 ${f.n_days} 天, ${f.bin_first_date} ~ ${f.bin_last_date})`;
+  } else if (status === "up_to_date" && f.bin_last_date) {
+    text += `  最新数据日期: ${f.bin_last_date}`;
+  }
+  $f.className = "freshness " + cls;
+  $f.textContent = text;
+}
+
+function makeMA(name, closes, win) {
+  const data = closes.map((_, i) => {
+    if (i < win - 1) return "-";
+    let s = 0;
+    for (let k = 0; k < win; k++) s += closes[i - k];
+    return +(s / win).toFixed(3);
+  });
+  return { name, type: "line", data, smooth: true, showSymbol: false, lineStyle: { width: 1 } };
+}
+</script>
+</body>
+</html>

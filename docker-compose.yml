@@ -1,0 +1,22 @@
+services:
+  quantinvest:
+    build: .
+    container_name: quantinvest
+    restart: unless-stopped
+    ports:
+      - "5055:5055"
+    env_file:
+      - .env
+    volumes:
+      # === 代码 bind mount (改 .py/.html/.css 后只需 docker compose restart, 无须 rebuild) ===
+      - ./app.py:/app/app.py:ro
+      - ./scripts:/app/scripts:ro
+      - ./templates:/app/templates:ro
+      - ./static:/app/static:ro
+      # === 与 PC 端 Z 盘共享的 qlib 数据 (调整 /volume1/... 为你实际的 Obsidian vault 路径) ===
+      - /volume1/docker/obsidian/vaults/claude/qlib/data/cn_data:/app/qlib_data/cn_data:rw
+      - /volume1/docker/obsidian/vaults/claude/qlib/data/csv_tmp:/app/qlib_data/csv_tmp:rw
+      # === SQLite 元数据持久化 ===
+      - ./data:/app/data:rw
+    networks:
+      - default

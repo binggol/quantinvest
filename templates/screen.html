@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>quantinvest · 选股</title>
+<link rel="stylesheet" href="/static/style.css"/>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+</head>
+<body>
+<header class="screen-header">
+  <h1>📊 quantinvest</h1>
+  <nav class="topnav">
+    <a href="/">K线浏览</a>
+    <a href="/screen" class="active">选股</a>
+  </nav>
+  <div class="meta" id="meta"></div>
+</header>
+
+<div class="screen-layout">
+  <!-- 左侧: 条件 + 结果 -->
+  <aside class="screen-side">
+    <div class="screen-criteria">
+      <h3>🎯 选股条件</h3>
+      <div id="criteria-form">加载中...</div>
+      <button id="btn-run" disabled>应用筛选</button>
+      <div id="hit-stat" class="hit-stat"></div>
+    </div>
+    <div class="screen-results">
+      <table id="result-table">
+        <thead id="result-thead"></thead>
+        <tbody id="result-tbody"></tbody>
+      </table>
+    </div>
+  </aside>
+
+  <!-- 右侧: 迷你 K 线 -->
+  <main class="screen-main">
+    <div class="kline-mini-header" id="kline-mini-header">点击左侧某只股票, 在这里看 K 线</div>
+    <div id="chart-mini"></div>
+    <div class="hint">↑/↓ 在结果表里切换股票</div>
+  </main>
+</div>
+
+<script>
+const $form = document.getElementById("criteria-form");
+const $btn = document.getElementById("btn-run");
+const $hitStat = document.getElementById("hit-stat");
+const $thead = document.getElementById("result-thead");
+const $tbody = document.getElementById("result-tbody");
+const $miniHeader = document.getElementById("kline-mini-header");
+const $meta = document.getElementById("meta");
+const chart = echarts.init(document.getElementById("chart-mini"));
+window.addEventListener("resize", () => chart.resize());
+if (window.ResizeObserver) {
+  new ResizeObserver(() => chart.resize()).observe(document.getElementById("chart-mini"));
+}
+
+let CONFIG = null;     // /api/screen/config 返回
+let results = [];      // 当前筛选结果
+let selectedIdx = -1;  // 当前选中的结果行
+
+// === 加载配置, 渲染表单 ===
+async function loadConfig() {
+  const r = await fetch("/api/screen/config");
+  CONFIG = await r.json();
+  const periodLabels = CONFIG.periods.map(p => p.label);
+  const annuals = periodLabels.slice(0, 3);
+  const quarterly = periodLabels[3];
+  $meta.textContent = `按今天 ${CONFIG.today} 自动判定: 过去三年报 ${annuals.join("/")} + 最新一期 ${quarterly}`;
+
+  let html = "<div class='c-row'><label>扣非净利润同比增速 ≥ <input type='number' id='growth-min' value='20' step='5' min='-100' max='1000'>%</label></div>";
+  html += "<div class='c-row'><label>应用到这些报告期:</label><div class='period-checks'>";
+  for (const p of periodLabels) {
+    html += `<label><input type='checkbox' class='ck-period' value='${p}' checked> ${p}</label>`;
+  }
+  html += "</div></div>";
+
+  html += `<div class='c-row'><label><input type='checkbox' id='q-growth-on'> 最新一期(${quarterly})单季扣非增速 ≥ <input type='number' id='q-growth-min' value='0' step='5' min='-100' max='1000'>%</label></div>`;
+
+  html += "<div class='c-row'><label>ROE ≥ <input type='number' id='roe-min' value='8' step='1' min='-100' max='100'>%</label></div>";
+  html += "<div class='c-row'><label>ROE 取哪一期:";
+  html += " <select id='roe-period'>";
+  for (const p of periodLabels) {
+    const sel = p === annuals[annuals.length - 1] ? "selected" : "";
+    html += `<option value='${p}' ${sel}>${p}</option>`;
+  }
+  html += "</select></label></div>";
+
+  $form.innerHTML = html;
+  $btn.disabled = false;
+}
+
+$btn.addEventListener("click", runScreen);
+
+async function runScreen() {
+  $btn.disabled = true;
+  $hitStat.textContent = "查询中...";
+  const growthMin = document.getElementById("growth-min").value;
+  const roeMin = document.getElementById("roe-min").value;
+  const roePeriod = document.getElementById("roe-period").value;
+  const qGrowthOn = document.getElementById("q-growth-on").checked;
+  const qGrowthMin = document.getElementById("q-growth-min").value;
+  const enabledPeriods = [...document.querySelectorAll(".ck-period:checked")].map(x => x.value);
+
+  const qs = new URLSearchParams({
+    growth_min: growthMin,
+    roe_min: roeMin,
+    roe_period: roePeriod,
+    q_growth_on: qGrowthOn ? "1" : "0",
+    q_growth_min: qGrowthMin,
+    growth_periods: enabledPeriods.join(","),
+    limit: "300",
+  });
+
+  try {
+    const r = await fetch("/api/screen?" + qs.toString());
+    const j = await r.json();
+    if (j.error) {
+      $hitStat.innerHTML = `<span class="warn">⚠️ ${j.error}</span>`;
+      return;
+    }
+    results = j.hits || [];
+    $hitStat.textContent = `命中 ${j.total_matched} 只, 显示前 ${results.length} 只`;
+    renderTable(j.criteria);
+    if (results.length > 0) selectRow(0);
+  } catch (e) {
+    $hitStat.innerHTML = `<span class="warn">⚠️ ${e.message}</span>`;
+  } finally {
+    $btn.disabled = false;
+  }
+}
+
+function renderTable(criteria) {
+  const periodHeads = (criteria.growth_periods || []).map(p => `<th title="扣非增速 ${p}">${p}Δ</th>`).join("");
+  $thead.innerHTML = `<tr>
+    <th>#</th><th>代码</th><th>名称</th><th>行业</th>
+    ${periodHeads}
+    <th title="最新一期单季扣非净利润同比">单季Δ(${criteria.q_growth_period})</th>
+    <th title="ROE">ROE(${criteria.roe_period})</th>
+  </tr>`;
+
+  $tbody.innerHTML = "";
+  results.forEach((h, i) => {
+    const growthCells = (criteria.growth_periods || []).map(p => {
+      const v = h.growth[p];
+      const cls = v === null ? "" : (v >= 0 ? "pos" : "neg");
+      return `<td class="num ${cls}">${v === null ? "—" : v.toFixed(1) + "%"}</td>`;
+    }).join("");
+    const qv = h.q_growth;
+    const qCls = qv === null || qv === undefined ? "" : (qv >= 0 ? "pos" : "neg");
+    const qCell = `<td class="num ${qCls}">${qv === null || qv === undefined ? "—" : qv.toFixed(1) + "%"}</td>`;
+    const row = document.createElement("tr");
+    row.dataset.idx = i;
+    row.innerHTML = `
+      <td>${i + 1}</td>
+      <td class="code">${h.code}</td>
+      <td>${h.name}</td>
+      <td class="industry">${h.industry || ""}</td>
+      ${growthCells}
+      ${qCell}
+      <td class="num roe">${h.roe.toFixed(1)}%</td>`;
+    row.addEventListener("click", () => selectRow(i));
+    $tbody.appendChild(row);
+  });
+}
+
+function selectRow(i) {
+  if (i < 0 || i >= results.length) return;
+  const prev = $tbody.querySelector("tr.selected");
+  if (prev) prev.classList.remove("selected");
+  const row = $tbody.querySelector(`tr[data-idx="${i}"]`);
+  if (row) {
+    row.classList.add("selected");
+    row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+  selectedIdx = i;
+  loadMiniKline(results[i]);
+}
+
+async function loadMiniKline(hit) {
+  $miniHeader.textContent = `${hit.name} · ${hit.code} · ${hit.industry || ""}  (加载中...)`;
+  try {
+    const r = await fetch(`/api/kline?code=${hit.code}&days=250&adjust=qfq&refresh=0`);
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || ("HTTP " + r.status));
+    }
+    const d = await r.json();
+    drawMini(d);
+    $miniHeader.textContent =
+      `${hit.name} · ${hit.code} · ${hit.industry || ""}  ·  最近 250 个交易日 (前复权)`;
+  } catch (e) {
+    $miniHeader.textContent = "K 线加载失败: " + e.message;
+  }
+}
+
+function drawMini(d) {
+  const kdata = d.dates.map((_, i) => [d.open[i], d.close[i], d.low[i], d.high[i]]);
+  const up = "#ef4444", down = "#22c55e";
+  chart.setOption({
+    animation: false,
+    tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
+    grid: [
+      { left: 50, right: 15, top: 20, height: "65%" },
+      { left: 50, right: 15, top: "75%", height: "20%" },
+    ],
+    xAxis: [
+      { type: "category", data: d.dates, scale: true, boundaryGap: false,
+        axisLabel: { show: false }, splitLine: { show: false } },
+      { type: "category", gridIndex: 1, data: d.dates, scale: true, boundaryGap: false,
+        axisLabel: { fontSize: 10 }, splitLine: { show: false } },
+    ],
+    yAxis: [
+      { scale: true, splitArea: { show: true } },
+      { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false } },
+    ],
+    dataZoom: [
+      { type: "inside", xAxisIndex: [0, 1], start: 70, end: 100 },
+    ],
+    series: [
+      { name: "K线", type: "candlestick", data: kdata,
+        itemStyle: { color: up, color0: down, borderColor: up, borderColor0: down } },
+      { name: "Volume", type: "bar", xAxisIndex: 1, yAxisIndex: 1,
+        data: d.volume.map((v, i) => ({ value: v, itemStyle: { color: d.close[i] >= d.open[i] ? up : down } })) },
+    ],
+  }, true);
+}
+
+// 上下方向键切换结果行 (有结果时才生效, 焦点不在 input/select 上)
+document.addEventListener("keydown", (e) => {
+  if (results.length === 0) return;
+  const tag = (document.activeElement && document.activeElement.tagName) || "";
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === "ArrowDown") { e.preventDefault(); selectRow(Math.min(results.length - 1, selectedIdx + 1)); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); selectRow(Math.max(0, selectedIdx - 1)); }
+  else if (e.key === "Home") { e.preventDefault(); selectRow(0); }
+  else if (e.key === "End") { e.preventDefault(); selectRow(results.length - 1); }
+});
+
+loadConfig();
+</script>
+</body>
+</html>
