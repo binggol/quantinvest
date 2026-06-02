@@ -521,7 +521,7 @@ def _ts_to_qlib_code(ts_code: str) -> str:
 
 def _yoy_growth(now: float | None, before: float | None) -> float | None:
     """同比增长率, before<=0 时返回 None (避免负数为分母时方向反掉)."""
-    if now is None or before is None:
+    if now is None or before is None or pd.isna(now) or pd.isna(before):
         return None
     try:
         if before <= 0:
@@ -601,10 +601,12 @@ def screen_query():
     # 转为 dict: ts_code → end_date → {dt_profit, roe}
     by_code: dict[str, dict] = {}
     for r in fina_df.itertuples(index=False):
+        # pandas 把 SQL NULL 读成 NaN(float), 不是 None; 统一清成 None,
+        # 否则 NaN 会骗过下游的 `is None` 判断, 还会被 jsonify 序列化成非法 JSON 的 NaN.
         by_code.setdefault(r.ts_code, {})[r.end_date] = {
-            "dt_profit": r.dt_profit_to_holder,
-            "roe": r.roe,
-            "q_dtprofit": r.q_dtprofit,
+            "dt_profit": None if pd.isna(r.dt_profit_to_holder) else float(r.dt_profit_to_holder),
+            "roe": None if pd.isna(r.roe) else float(r.roe),
+            "q_dtprofit": None if pd.isna(r.q_dtprofit) else float(r.q_dtprofit),
         }
 
     # 关联股票名/行业
