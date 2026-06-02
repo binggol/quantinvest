@@ -36,6 +36,15 @@
 
   <!-- 右侧: 迷你 K 线 -->
   <main class="screen-main">
+    <div class="mini-controls">
+      <label class="ctrl-group">复权:
+        <select id="mini-adjust">
+          <option value="qfq" selected>前复权</option>
+          <option value="hfq">后复权</option>
+          <option value="none">不复权</option>
+        </select>
+      </label>
+    </div>
     <div class="kline-mini-header" id="kline-mini-header">点击左侧某只股票, 在这里看 K 线</div>
     <div id="chart-mini"></div>
     <div class="hint">↑/↓ 在结果表里切换股票</div>
@@ -49,7 +58,12 @@ const $hitStat = document.getElementById("hit-stat");
 const $thead = document.getElementById("result-thead");
 const $tbody = document.getElementById("result-tbody");
 const $miniHeader = document.getElementById("kline-mini-header");
+const $miniAdjust = document.getElementById("mini-adjust");
 const $meta = document.getElementById("meta");
+// 切换复权方式时, 重新加载当前选中股票的 K 线
+$miniAdjust.addEventListener("change", () => {
+  if (selectedIdx >= 0 && results[selectedIdx]) loadMiniKline(results[selectedIdx]);
+});
 const chart = echarts.init(document.getElementById("chart-mini"));
 window.addEventListener("resize", () => chart.resize());
 if (window.ResizeObserver) {
@@ -181,15 +195,17 @@ function selectRow(i) {
 async function loadMiniKline(hit) {
   $miniHeader.textContent = `${hit.name} · ${hit.code} · ${hit.industry || ""}  (加载中...)`;
   try {
-    const r = await fetch(`/api/kline?code=${hit.code}&days=250&adjust=qfq&refresh=0`);
+    const adjust = $miniAdjust.value;
+    const r = await fetch(`/api/kline?code=${hit.code}&days=0&adjust=${adjust}&refresh=0`);
     if (!r.ok) {
       const j = await r.json().catch(() => ({}));
       throw new Error(j.error || ("HTTP " + r.status));
     }
     const d = await r.json();
     drawMini(d);
+    const adjLabel = { qfq: "前复权", hfq: "后复权", none: "不复权" }[d.adjust] || d.adjust;
     $miniHeader.textContent =
-      `${hit.name} · ${hit.code} · ${hit.industry || ""}  ·  最近 250 个交易日 (前复权)`;
+      `${hit.name} · ${hit.code} · ${hit.industry || ""}  ·  全部历史 (${adjLabel}) · 拖动下方滑块缩放`;
   } catch (e) {
     $miniHeader.textContent = "K 线加载失败: " + e.message;
   }
@@ -201,30 +217,48 @@ function drawMini(d) {
   chart.setOption({
     animation: false,
     tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
+    legend: { data: ["K线", "MA5", "MA10", "MA20", "MA60"], top: 0 },
     grid: [
-      { left: 50, right: 15, top: 20, height: "65%" },
-      { left: 50, right: 15, top: "75%", height: "20%" },
+      { left: 50, right: 15, top: 30, height: "58%" },
+      { left: 50, right: 15, top: "72%", height: "18%" },
     ],
     xAxis: [
       { type: "category", data: d.dates, scale: true, boundaryGap: false,
-        axisLabel: { show: false }, splitLine: { show: false } },
+        axisLine: { onZero: false }, splitLine: { show: false }, axisLabel: { show: false } },
       { type: "category", gridIndex: 1, data: d.dates, scale: true, boundaryGap: false,
-        axisLabel: { fontSize: 10 }, splitLine: { show: false } },
+        axisLine: { onZero: false }, axisTick: { show: false }, splitLine: { show: false },
+        axisLabel: { fontSize: 10 } },
     ],
     yAxis: [
       { scale: true, splitArea: { show: true } },
-      { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false } },
+      { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, axisLine: { show: false },
+        axisTick: { show: false }, splitLine: { show: false } },
     ],
     dataZoom: [
       { type: "inside", xAxisIndex: [0, 1], start: 70, end: 100 },
+      { show: true, xAxisIndex: [0, 1], type: "slider", top: "93%", start: 70, end: 100 },
     ],
     series: [
       { name: "K线", type: "candlestick", data: kdata,
         itemStyle: { color: up, color0: down, borderColor: up, borderColor0: down } },
+      makeMA("MA5", d.close, 5),
+      makeMA("MA10", d.close, 10),
+      makeMA("MA20", d.close, 20),
+      makeMA("MA60", d.close, 60),
       { name: "Volume", type: "bar", xAxisIndex: 1, yAxisIndex: 1,
         data: d.volume.map((v, i) => ({ value: v, itemStyle: { color: d.close[i] >= d.open[i] ? up : down } })) },
     ],
   }, true);
+}
+
+function makeMA(name, closes, win) {
+  const data = closes.map((_, i) => {
+    if (i < win - 1) return "-";
+    let s = 0;
+    for (let k = 0; k < win; k++) s += closes[i - k];
+    return +(s / win).toFixed(3);
+  });
+  return { name, type: "line", data, smooth: true, showSymbol: false, lineStyle: { width: 1 } };
 }
 
 // 上下方向键切换结果行 (有结果时才生效, 焦点不在 input/select 上)
