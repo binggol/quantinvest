@@ -33,6 +33,9 @@ FINANCIALS_DB = os.environ.get("FINANCIALS_DB", "/app/data/financials.db")
 PREDICT_JSON = Path(os.environ.get("PREDICT_JSON", str(Path(STOCK_META_DB).parent / "predictions.json")))
 # 是否在本机(容器)做预测计算. 默认 0 = 计算在 PC 上跑、NAS 只读展示
 PREDICT_COMPUTE_HERE = (os.environ.get("PREDICT_COMPUTE_HERE", "0") == "1")
+# 方案B: 网页按钮写请求文件到共享目录, PC 监听脚本执行并回写状态
+PREDICT_REQUEST = PREDICT_JSON.parent / "predict_request.json"
+PREDICT_STATUS = PREDICT_JSON.parent / "predict_status.json"
 TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN", "")
 DAILY_HOUR = int(os.environ.get("DAILY_UPDATE_HOUR", "21"))
 DAILY_MINUTE = int(os.environ.get("DAILY_UPDATE_MINUTE", "0"))
@@ -962,22 +965,48 @@ def predict_page():
     return render_template("predict.html")
 
 
+def _read_json(p: Path):
+    try:
+        return json.loads(p.read_text(encoding="utf-8-sig")) if p.exists() else None
+    except Exception:
+        return None
+
+
 @app.route("/api/predict")
 def api_predict():
+    extra = {
+        "compute_here": PREDICT_COMPUTE_HERE,
+        "pc_pending": PREDICT_REQUEST.exists(),     # PC 是否有请求在排队/处理
+        "pc_status": _read_json(PREDICT_STATUS),    # PC 监听脚本回写的状态
+        "job": _predict_job,
+    }
     if not PREDICT_JSON.exists():
-        msg = ("尚无预测结果。计算在 PC 端进行: 在 PC 上运行 scripts/run_predict_pc.ps1 "
-               "生成 predictions.json 到共享目录") if not PREDICT_COMPUTE_HERE else \
-              "尚无预测结果, 点「更新数据并预测」生成"
-        return jsonify({"hits": [], "job": _predict_job,
-                        "compute_here": PREDICT_COMPUTE_HERE, "message": msg})
-    try:
-        data = json.loads(PREDICT_JSON.read_text(encoding="utf-8"))
-    except Exception as e:
-        return jsonify({"hits": [], "job": _predict_job,
-                        "compute_here": PREDICT_COMPUTE_HERE, "message": f"读取预测失败: {e}"})
-    data["job"] = _predict_job
-    data["compute_here"] = PREDICT_COMPUTE_HERE
+        msg = "尚无预测结果, 点下方按钮让 PC 跑一次" if not PREDICT_COMPUTE_HERE \
+              else "尚无预测结果, 点「更新数据并预测」生成"
+        return jsonify({"hits": [], "message": msg, **extra})
+    data = _read_json(PREDICT_JSON)
+    if data is None:
+        return jsonify({"hits": [], "message": "读取预测失败", **extra})
+    data.update(extra)
     return jsonify(data)
+
+
+@app.route("/api/predict/request")
+def api_predict_request():
+    """网页按钮触发预测. 本机计算模式直接本地跑; 否则写请求文件交 PC 监听脚本执行."""
+    retrain = (request.args.get("retrain", "0") == "1")
+    if PREDICT_COMPUTE_HERE:
+        return api_predict_run()
+    if PREDICT_REQUEST.exists():
+        return jsonify({"ok": False, "message": "已有预测请求在排队/处理中"})
+    try:
+        PREDICT_REQUEST.parent.mkdir(parents=True, exist_ok=True)
+        PREDICT_REQUEST.write_text(json.dumps(
+            {"requested_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "retrain": retrain},
+            ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"写请求失败: {e}"})
+    return jsonify({"ok": True, "message": "已通知 PC 开始预测" + ("(含重训)" if retrain else "")})
 
 
 def _run_predict_job(retrain: bool):

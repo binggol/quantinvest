@@ -24,8 +24,8 @@
     <div class="screen-criteria">
       <h3>🧠 预测</h3>
       <div class="c-row" id="pred-info">加载中...</div>
-      <button id="btn-predict">🔄 更新数据并预测</button>
-      <button id="btn-retrain" style="background:#7c2d12;margin-top:6px;">🧠 重训模型 + 预测 (慢)</button>
+      <button id="btn-predict">🔄 让 PC 重新预测</button>
+      <button id="btn-retrain" style="background:#7c2d12;margin-top:6px;">🧠 让 PC 重训 + 预测 (慢)</button>
       <div id="job-stat" class="hit-stat"></div>
       <div class="c-row" style="color:#64748b;font-size:11px;margin-top:8px;">
         标签 = 下一交易日收益; 模型每周日 03:00 自动重训, 每日 21:00 数据更新后自动预测。
@@ -81,20 +81,20 @@ async function loadPrediction() {
     const r = await fetch("/api/predict");
     const j = await r.json();
     renderInfo(j);
-    // 方案B: NAS 只读展示, 隐藏本机计算按钮
-    if (j.compute_here === false) {
-      $btnPredict.style.display = "none";
-      $btnRetrain.style.display = "none";
-    }
     const job = j.job || {};
-    if (job.running) {
-      $jobStat.innerHTML = `<span class="warn">⏳ ${job.status} (started ${job.started || ""})</span>`;
+    const pcs = j.pc_status || null;
+    const busy = job.running || j.pc_pending || (pcs && pcs.state === "running");
+    if (busy) {
+      const txt = job.running ? job.status
+                : (pcs && pcs.state === "running" ? pcs.msg : "已提交, 等待 PC 开始...");
+      $jobStat.innerHTML = `<span class="warn">⏳ ${txt}</span>`;
       $btnPredict.disabled = $btnRetrain.disabled = true;
       if (!pollTimer) pollTimer = setInterval(loadPrediction, 5000);
     } else {
       $btnPredict.disabled = $btnRetrain.disabled = false;
       if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-      if (job.status) $jobStat.textContent = job.status;
+      const s = (pcs && pcs.msg) ? `PC: ${pcs.state} · ${pcs.msg}` : (job.status || "");
+      if (s) $jobStat.textContent = s;
     }
     if (j.hits && j.generated_at !== lastGen) {
       lastGen = j.generated_at;
@@ -119,7 +119,7 @@ async function runPredict(retrain) {
   $btnPredict.disabled = $btnRetrain.disabled = true;
   $jobStat.textContent = "启动中...";
   try {
-    const r = await fetch("/api/predict/run?retrain=" + (retrain ? "1" : "0"));
+    const r = await fetch("/api/predict/request?retrain=" + (retrain ? "1" : "0"));
     const j = await r.json();
     $jobStat.textContent = j.message || "";
     setTimeout(loadPrediction, 1500);
