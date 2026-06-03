@@ -886,7 +886,7 @@ def pattern_query():
     ex_new = (request.args.get("ex_new", "1") == "1")
     ex_board = (request.args.get("ex_board", "1") == "1")  # 北交所/科创板
     min_amount = float(request.args.get("min_amount", "5000")) * 1e4  # 万元 -> 元
-    limit = int(request.args.get("limit", "100"))
+    limit = int(request.args.get("limit", "0"))  # 0 = 全部命中都返回
 
     if not Path(STOCK_META_DB).exists():
         return jsonify({"error": "stock_meta.db 不存在", "hits": []}), 503
@@ -937,7 +937,7 @@ def pattern_query():
 
     hits.sort(key=lambda x: x["score"], reverse=True)
     return jsonify({
-        "hits": hits[:limit],
+        "hits": hits[:limit] if limit > 0 else hits,
         "total_matched": len(hits),
         "scanned": scanned,
         "tf": tf,
