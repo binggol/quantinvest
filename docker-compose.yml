@@ -7,6 +7,10 @@ services:
       - "5055:5055"
     env_file:
       - .env
+    environment:
+      # 方案B: 预测计算在 PC 上跑, 结果写到与 PC 共享的 csv_tmp 目录, NAS 只读展示
+      - PREDICT_JSON=/app/qlib_data/csv_tmp/predictions.json
+      # - PREDICT_COMPUTE_HERE=1   # 若想让 NAS 自己算, 取消注释 (慢)
     volumes:
       # === 代码 bind mount (改 .py/.html/.css 后只需 docker compose restart, 无须 rebuild) ===
       - ./app.py:/app/app.py:ro

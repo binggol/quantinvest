@@ -81,6 +81,11 @@ async function loadPrediction() {
     const r = await fetch("/api/predict");
     const j = await r.json();
     renderInfo(j);
+    // 方案B: NAS 只读展示, 隐藏本机计算按钮
+    if (j.compute_here === false) {
+      $btnPredict.style.display = "none";
+      $btnRetrain.style.display = "none";
+    }
     const job = j.job || {};
     if (job.running) {
       $jobStat.innerHTML = `<span class="warn">⏳ ${job.status} (started ${job.started || ""})</span>`;

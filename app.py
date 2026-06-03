@@ -29,7 +29,10 @@ QLIB_DATA_PATH = Path(os.environ.get("QLIB_DATA_PATH", "/app/qlib_data/cn_data")
 PARQUET_DIR = Path(os.environ.get("PARQUET_DIR", "/app/qlib_data/csv_tmp/tushare_daily"))
 STOCK_META_DB = os.environ.get("STOCK_META_DB", "/app/data/stock_meta.db")
 FINANCIALS_DB = os.environ.get("FINANCIALS_DB", "/app/data/financials.db")
-PREDICT_JSON = Path(STOCK_META_DB).parent / "predictions.json"  # qlib 预测结果
+# qlib 预测结果路径 (默认 ./data; 方案B 下指向 PC↔NAS 共享目录, 见 docker-compose)
+PREDICT_JSON = Path(os.environ.get("PREDICT_JSON", str(Path(STOCK_META_DB).parent / "predictions.json")))
+# 是否在本机(容器)做预测计算. 默认 0 = 计算在 PC 上跑、NAS 只读展示
+PREDICT_COMPUTE_HERE = (os.environ.get("PREDICT_COMPUTE_HERE", "0") == "1")
 TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN", "")
 DAILY_HOUR = int(os.environ.get("DAILY_UPDATE_HOUR", "21"))
 DAILY_MINUTE = int(os.environ.get("DAILY_UPDATE_MINUTE", "0"))
@@ -962,13 +965,18 @@ def predict_page():
 @app.route("/api/predict")
 def api_predict():
     if not PREDICT_JSON.exists():
+        msg = ("尚无预测结果。计算在 PC 端进行: 在 PC 上运行 scripts/run_predict_pc.ps1 "
+               "生成 predictions.json 到共享目录") if not PREDICT_COMPUTE_HERE else \
+              "尚无预测结果, 点「更新数据并预测」生成"
         return jsonify({"hits": [], "job": _predict_job,
-                        "message": "尚无预测结果, 点「更新数据并预测」生成"})
+                        "compute_here": PREDICT_COMPUTE_HERE, "message": msg})
     try:
         data = json.loads(PREDICT_JSON.read_text(encoding="utf-8"))
     except Exception as e:
-        return jsonify({"hits": [], "job": _predict_job, "message": f"读取预测失败: {e}"})
+        return jsonify({"hits": [], "job": _predict_job,
+                        "compute_here": PREDICT_COMPUTE_HERE, "message": f"读取预测失败: {e}"})
     data["job"] = _predict_job
+    data["compute_here"] = PREDICT_COMPUTE_HERE
     return jsonify(data)
 
 
@@ -990,6 +998,9 @@ def _run_predict_job(retrain: bool):
 
 @app.route("/api/predict/run")
 def api_predict_run():
+    if not PREDICT_COMPUTE_HERE:
+        return jsonify({"ok": False,
+                        "message": "本实例不在本机计算; 预测由 PC 端生成, 此页只展示结果"})
     if _predict_job.get("running"):
         return jsonify({"ok": False, "message": "已有预测任务在运行中"})
     retrain = (request.args.get("retrain", "0") == "1")
@@ -1094,12 +1105,13 @@ def run_daily_update():
             meta_main(force=False)  # refresh weekly per STOCK_META_REFRESH_DAYS
         except Exception as e:
             log.warning(f"stock_meta refresh skipped: {e}")
-        # 数据更新后, 自动预测下一交易日买入清单 (用已存模型, 不重训)
-        try:
-            from scripts.predict_qlib import predict_and_save
-            predict_and_save()
-        except Exception as e:
-            log.warning(f"qlib 预测跳过: {e}")
+        # 数据更新后, 自动预测下一交易日买入清单 (仅当本机负责计算; 方案B由PC算)
+        if PREDICT_COMPUTE_HERE:
+            try:
+                from scripts.predict_qlib import predict_and_save
+                predict_and_save()
+            except Exception as e:
+                log.warning(f"qlib 预测跳过: {e}")
     except Exception as e:
         log.exception(f"daily update failed: {e}")
 
@@ -1141,14 +1153,15 @@ def init_scheduler():
         max_instances=1,
         coalesce=True,
     )
-    # 每周日凌晨 03:00 重训 qlib 预测模型 (平时每日用已存模型预测即可)
-    sched.add_job(
-        run_weekly_predict_retrain,
-        CronTrigger(day_of_week="sun", hour=3, minute=0),
-        id="weekly_predict_retrain",
-        max_instances=1,
-        coalesce=True,
-    )
+    # 每周日凌晨 03:00 重训 qlib 预测模型 (仅当本机负责计算; 方案B由PC算, 默认不挂)
+    if PREDICT_COMPUTE_HERE:
+        sched.add_job(
+            run_weekly_predict_retrain,
+            CronTrigger(day_of_week="sun", hour=3, minute=0),
+            id="weekly_predict_retrain",
+            max_instances=1,
+            coalesce=True,
+        )
     sched.start()
     log.info(f"scheduler started: daily update at {DAILY_HOUR:02d}:{DAILY_MINUTE:02d}, "
              f"weekly financials Mon 02:00, weekly qlib retrain Sun 03:00 (Asia/Shanghai)")
