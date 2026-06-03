@@ -22,8 +22,9 @@
   <aside class="screen-side">
     <div class="screen-criteria">
       <h3>☕ 形态参数</h3>
+      <div class="c-row"><label>周期 <select id="tf"><option value="w" selected>周线</option><option value="d">日线</option></select></label></div>
       <div class="c-row"><label>杯深 % <input type="number" id="cup-depth-min" value="12" step="1" min="1" max="90" style="width:54px"> ~ <input type="number" id="cup-depth-max" value="50" step="1" min="1" max="90" style="width:54px"></label></div>
-      <div class="c-row"><label>杯时长(周) <input type="number" id="cup-min" value="7" step="1" min="3" max="120" style="width:54px"> ~ <input type="number" id="cup-max" value="65" step="1" min="5" max="200" style="width:54px"></label></div>
+      <div class="c-row"><label>杯时长(<span id="cup-unit">周</span>) <input type="number" id="cup-min" value="7" step="1" min="3" max="400" style="width:54px"> ~ <input type="number" id="cup-max" value="65" step="1" min="5" max="500" style="width:54px"></label></div>
       <div class="c-row"><label>柄回撤上限 % <input type="number" id="handle-depth-max" value="15" step="1" min="2" max="40" style="width:54px"></label></div>
       <div class="c-row"><label>离买点容忍 % <input type="number" id="near-pivot-max" value="8" step="1" min="1" max="30" style="width:54px"></label></div>
       <div class="c-row"><label>前期涨势下限 % <input type="number" id="prior-gain-min" value="30" step="5" min="0" max="300" style="width:54px"></label></div>
@@ -78,12 +79,21 @@ $miniAdjust.addEventListener("change", () => {
 });
 $btn.addEventListener("click", runScan);
 
+const $tf = document.getElementById("tf");
+$tf.addEventListener("change", () => {
+  const daily = $tf.value === "d";
+  document.getElementById("cup-unit").textContent = daily ? "日" : "周";
+  document.getElementById("cup-min").value = daily ? 35 : 7;
+  document.getElementById("cup-max").value = daily ? 325 : 65;
+});
+
 function val(id) { return document.getElementById(id).value; }
 
 async function runScan() {
   $btn.disabled = true;
-  $hitStat.textContent = "扫描全市场中... (周线检测约需 30~90 秒)";
+  $hitStat.textContent = "扫描全市场中... (约需 0.5~2 分钟)";
   const qs = new URLSearchParams({
+    tf: val("tf"),
     cup_depth_min: val("cup-depth-min"), cup_depth_max: val("cup-depth-max"),
     cup_min: val("cup-min"), cup_max: val("cup-max"),
     handle_depth_max: val("handle-depth-max"),

@@ -706,8 +706,30 @@ def _week_buckets() -> dict:
         wid, _ = pd.factorize(per, sort=False)        # 日历各日所属周的递增 id
         wend = [str(per[np.where(wid == k)[0][0]].end_time.date())
                 for k in range(int(wid.max()) + 1)] if len(cal) else []
-        _WEEK_CACHE = {"wid": wid.astype(np.int64), "wend": wend, "n": len(cal)}
+        _WEEK_CACHE = {"wid": wid.astype(np.int64), "wend": wend, "n": len(cal), "cal": cal}
     return _WEEK_CACHE
+
+
+def _daily_ohlc(code: str, days: int = 800) -> dict | None:
+    """直接读 bin(前复权) 取最近 days 个交易日的日线. 返回 numpy 数组 dict 或 None."""
+    si, close = _read_bin(code, "close")
+    if close.size < 120:
+        return None
+    _, high = _read_bin(code, "high")
+    _, low = _read_bin(code, "low")
+    _, vol = _read_bin(code, "volume")
+    n = min(close.size, high.size, low.size, vol.size)
+    off = max(0, n - days)
+    cal = _week_buckets()["cal"]
+    if si + n > len(cal):
+        return None
+    return {
+        "dates": cal[si + off:si + n],
+        "high": high[off:n].astype(float),
+        "low": low[off:n].astype(float),
+        "close": close[off:n].astype(float),
+        "volume": vol[off:n].astype(float),
+    }
 
 
 def _weekly_ohlc(code: str, days: int = 900) -> dict | None:
@@ -799,7 +821,7 @@ def _detect_cup_handle(w: dict, p: dict) -> dict | None:
             mid = bottom + 0.5 * (rim - bottom)      # 柄应在杯的上半部
             if handle_lo < mid:
                 continue
-            pw = min(p["prior_weeks"], Lidx)         # 前期涨势 >= prior_gain_min
+            pw = min(p["prior_bars"], Lidx)          # 前期涨势 >= prior_gain_min
             if pw < 4:
                 continue
             prior_low = float(C[Lidx - pw:Lidx].min())
@@ -826,7 +848,8 @@ def _detect_cup_handle(w: dict, p: dict) -> dict | None:
                     "left_rim": dates[Lidx],
                     "bottom": dates[bottom_pos],
                     "right_rim": dates[R],
-                    "ret_26w": (cclose / float(C[cur - 26]) - 1) * 100 if cur >= 26 else None,
+                    "ret": (cclose / float(C[cur - p["rs_lookback"]]) - 1) * 100
+                           if cur >= p["rs_lookback"] else None,
                 }
     if best:
         best.pop("_score", None)
@@ -836,10 +859,18 @@ def _detect_cup_handle(w: dict, p: dict) -> dict | None:
 @app.route("/api/pattern")
 def pattern_query():
     """扫全市场, 找当前正在成形杯柄、价已逼近买点的股票, 按就绪度排序."""
+    tf = request.args.get("tf", "w")  # 'w' 周线 / 'd' 日线
+    # 与周期相关的默认值 (杯/柄长度单位 = 该周期的 bar 数; 前期涨势/RS 回溯也按周期换算)
+    if tf == "d":
+        tf_def = {"cup_min": "35", "cup_max": "325", "handle_max": "25",
+                  "prior_bars": 150, "rs_lookback": 130}
+    else:
+        tf_def = {"cup_min": "7", "cup_max": "65", "handle_max": "5",
+                  "prior_bars": 30, "rs_lookback": 26}
     p = {
-        "cup_min": int(request.args.get("cup_min", "7")),
-        "cup_max": int(request.args.get("cup_max", "65")),
-        "handle_max": int(request.args.get("handle_max", "5")),
+        "cup_min": int(request.args.get("cup_min", tf_def["cup_min"])),
+        "cup_max": int(request.args.get("cup_max", tf_def["cup_max"])),
+        "handle_max": int(request.args.get("handle_max", tf_def["handle_max"])),
         "cup_depth_min": float(request.args.get("cup_depth_min", "12")) / 100,
         "cup_depth_max": float(request.args.get("cup_depth_max", "50")) / 100,
         "handle_depth_max": float(request.args.get("handle_depth_max", "15")) / 100,
@@ -848,7 +879,8 @@ def pattern_query():
         "prior_gain_min": float(request.args.get("prior_gain_min", "30")) / 100,
         "rim_tol": 0.08,
         "pivot_buffer": 0.01,
-        "prior_weeks": 30,
+        "prior_bars": tf_def["prior_bars"],
+        "rs_lookback": tf_def["rs_lookback"],
     }
     ex_st = (request.args.get("ex_st", "1") == "1")
     ex_new = (request.args.get("ex_new", "1") == "1")
@@ -875,11 +907,14 @@ def pattern_query():
             continue
         if ex_new and r.list_date and r.list_date > one_year_ago:
             continue
-        w = _weekly_ohlc(code)
+        w = _daily_ohlc(code) if tf == "d" else _weekly_ohlc(code)
         if w is None:
             continue
-        # 流动性: 近 12 周日均成交额估算 (周成交额 = close*周成交量(手)*100, /5 得日均)
-        avg_daily_amount = float((w["close"][-12:] * w["volume"][-12:]).mean()) * 100 / 5.0
+        # 流动性: 估算近期日均成交额 (成交额 = close*成交量(手)*100). 周线 sum/5 得日均.
+        if tf == "d":
+            avg_daily_amount = float((w["close"][-60:] * w["volume"][-60:]).mean()) * 100
+        else:
+            avg_daily_amount = float((w["close"][-12:] * w["volume"][-12:]).mean()) * 100 / 5.0
         if avg_daily_amount < min_amount:
             continue
         scanned += 1
@@ -890,10 +925,10 @@ def pattern_query():
                     "industry": r.industry or ""})
         hits.append(det)
 
-    # RS: 26周收益在命中股内的百分位 (1-99)
-    rets = sorted(h["ret_26w"] for h in hits if h.get("ret_26w") is not None)
+    # RS: 近 ~26 周收益在命中股内的百分位 (1-99)
+    rets = sorted(h["ret"] for h in hits if h.get("ret") is not None)
     for h in hits:
-        v = h.get("ret_26w")
+        v = h.get("ret")
         if v is None or not rets:
             h["rs"] = None
         else:
@@ -905,6 +940,7 @@ def pattern_query():
         "hits": hits[:limit],
         "total_matched": len(hits),
         "scanned": scanned,
+        "tf": tf,
         "today": today.strftime("%Y-%m-%d"),
     })
 
