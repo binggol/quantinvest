@@ -492,6 +492,11 @@ def screen_page():
     return render_template("screen.html")
 
 
+@app.route("/pattern")
+def pattern_page():
+    return render_template("pattern.html")
+
+
 # ============================================================
 #  /api/screen  基本面选股
 # ============================================================
@@ -682,6 +687,225 @@ def screen_query():
             "q_growth_min": q_growth_min,
         },
         "all_periods": [{"label": l, "end_date": e} for l, e in periods],
+    })
+
+
+# ============================================================
+#  /api/pattern  欧奈尔杯柄形态选股 (周线)
+# ============================================================
+
+# 日历→周(W-FRI) 的映射, 进程内缓存一次 (全市场共用同一日历, 避免每股重复解析)
+_WEEK_CACHE: dict | None = None
+
+
+def _week_buckets() -> dict:
+    global _WEEK_CACHE
+    if _WEEK_CACHE is None:
+        cal = _read_calendar()
+        per = pd.to_datetime(cal).to_period("W-FRI")
+        wid, _ = pd.factorize(per, sort=False)        # 日历各日所属周的递增 id
+        wend = [str(per[np.where(wid == k)[0][0]].end_time.date())
+                for k in range(int(wid.max()) + 1)] if len(cal) else []
+        _WEEK_CACHE = {"wid": wid.astype(np.int64), "wend": wend, "n": len(cal)}
+    return _WEEK_CACHE
+
+
+def _weekly_ohlc(code: str, days: int = 900) -> dict | None:
+    """直接读 bin(前复权) + numpy reduceat 重采样成周线(周五收盘). 快路径, 无 pandas resample."""
+    si, close = _read_bin(code, "close")
+    if close.size < 60:
+        return None
+    _, high = _read_bin(code, "high")
+    _, low = _read_bin(code, "low")
+    _, vol = _read_bin(code, "volume")
+    n = min(close.size, high.size, low.size, vol.size)
+    off = max(0, n - days)                              # 只取最近 days 个交易日
+    s, e = si + off, si + n
+    wb = _week_buckets()
+    if e > wb["n"]:
+        return None
+    wid = wb["wid"][s:e]
+    if wid.size < 60:
+        return None
+    close, high, low, vol = close[off:n], high[off:n], low[off:n], vol[off:n]
+
+    starts = np.concatenate([[0], np.nonzero(np.diff(wid))[0] + 1])
+    ends = np.append(starts[1:], wid.size)
+    if starts.size < 12:
+        return None
+    return {
+        "dates": [wb["wend"][wid[st]] for st in starts],
+        "high": np.maximum.reduceat(high, starts).astype(float),
+        "low": np.minimum.reduceat(low, starts).astype(float),
+        "close": close[ends - 1].astype(float),
+        "volume": np.add.reduceat(vol, starts).astype(float),
+    }
+
+
+def _detect_cup_handle(w: dict, p: dict) -> dict | None:
+    """在周线上检测"当前正在成形"的杯柄形态. 柄部结束于最新一周, 故命中即"当下".
+
+    返回最佳形态的指标 dict, 或 None. 评分以"突破就绪度"为主
+    (现价离买点越近 + 柄部缩量越明显 + 杯沿越对称, 分越高).
+    """
+    H, L, C, V = w["high"], w["low"], w["close"], w["volume"]
+    dates = w["dates"]
+    n = len(C)
+    if n < p["cup_min"] + 4:
+        return None
+    cur = n - 1
+    best = None
+    # 柄 = 最近 hl 周 (R 为右杯沿)
+    for hl in range(1, p["handle_max"] + 1):
+        R = cur - hl
+        if R < p["cup_min"]:
+            continue
+        RH = float(H[R])
+        if RH <= 0:
+            continue
+        handle_hi = float(H[R + 1:].max())
+        handle_lo = float(L[R + 1:].min())
+        if handle_hi > RH * 1.005:                 # 柄不应创新高(突破右杯沿)
+            continue
+        handle_depth = (RH - handle_lo) / RH
+        if handle_depth > p["handle_depth_max"]:    # 柄回撤要浅
+            continue
+        pivot = RH * (1 + p["pivot_buffer"])        # 买点 = 右杯沿 + 缓冲
+        cclose = float(C[cur])
+        dist = (pivot - cclose) / pivot             # >0 在买点下方, <0 已突破
+        if dist > p["near_pivot_max"] or dist < -p["above_pivot_max"]:
+            continue                                # 离买点太远 / 已冲太高都不算"就绪"
+        # 杯 = 右杯沿 R 之前 cup_len 周, 左杯沿 Lidx
+        for cup_len in range(p["cup_min"], min(p["cup_max"], R) + 1):
+            Lidx = R - cup_len
+            if Lidx < 1:
+                break
+            LH = float(H[Lidx])
+            if LH <= 0:
+                continue
+            rim = max(LH, RH)
+            rim_diff = abs(RH - LH) / rim           # 左右杯沿要接近
+            if rim_diff > p["rim_tol"]:
+                continue
+            seg = L[Lidx:R + 1]
+            bottom = float(seg.min())
+            bottom_pos = Lidx + int(np.argmin(seg))
+            depth = (rim - bottom) / rim
+            if not (p["cup_depth_min"] <= depth <= p["cup_depth_max"]):
+                continue
+            rel = (bottom_pos - Lidx) / cup_len      # U型: 底部居中, 非 V 型急跌
+            if not (0.2 <= rel <= 0.8):
+                continue
+            mid = bottom + 0.5 * (rim - bottom)      # 柄应在杯的上半部
+            if handle_lo < mid:
+                continue
+            pw = min(p["prior_weeks"], Lidx)         # 前期涨势 >= prior_gain_min
+            if pw < 4:
+                continue
+            prior_low = float(C[Lidx - pw:Lidx].min())
+            if prior_low <= 0 or (C[Lidx] - prior_low) / prior_low < p["prior_gain_min"]:
+                continue
+            cup_vol = float(V[Lidx:R + 1].mean())
+            handle_vol = float(V[R + 1:].mean())
+            dryup = (cup_vol - handle_vol) / cup_vol if cup_vol > 0 else 0.0
+            readiness = 1.0 if dist < 0 else max(0.0, 1 - dist / p["near_pivot_max"])
+            shape = 1 - rim_diff / p["rim_tol"]
+            score = 100 * (0.55 * readiness + 0.25 * max(0.0, dryup) + 0.20 * shape)
+            if best is None or score > best["_score"]:
+                best = {
+                    "_score": score,
+                    "score": round(score, 1),
+                    "pivot": round(pivot, 2),
+                    "close": round(cclose, 2),
+                    "dist_pct": round(dist * 100, 2),
+                    "cup_depth_pct": round(depth * 100, 1),
+                    "cup_weeks": cup_len,
+                    "handle_weeks": hl,
+                    "handle_depth_pct": round(handle_depth * 100, 1),
+                    "vol_dryup_pct": round(dryup * 100, 1),
+                    "left_rim": dates[Lidx],
+                    "bottom": dates[bottom_pos],
+                    "right_rim": dates[R],
+                    "ret_26w": (cclose / float(C[cur - 26]) - 1) * 100 if cur >= 26 else None,
+                }
+    if best:
+        best.pop("_score", None)
+    return best
+
+
+@app.route("/api/pattern")
+def pattern_query():
+    """扫全市场, 找当前正在成形杯柄、价已逼近买点的股票, 按就绪度排序."""
+    p = {
+        "cup_min": int(request.args.get("cup_min", "7")),
+        "cup_max": int(request.args.get("cup_max", "65")),
+        "handle_max": int(request.args.get("handle_max", "5")),
+        "cup_depth_min": float(request.args.get("cup_depth_min", "12")) / 100,
+        "cup_depth_max": float(request.args.get("cup_depth_max", "50")) / 100,
+        "handle_depth_max": float(request.args.get("handle_depth_max", "15")) / 100,
+        "near_pivot_max": float(request.args.get("near_pivot_max", "8")) / 100,
+        "above_pivot_max": float(request.args.get("above_pivot_max", "5")) / 100,
+        "prior_gain_min": float(request.args.get("prior_gain_min", "30")) / 100,
+        "rim_tol": 0.08,
+        "pivot_buffer": 0.01,
+        "prior_weeks": 30,
+    }
+    ex_st = (request.args.get("ex_st", "1") == "1")
+    ex_new = (request.args.get("ex_new", "1") == "1")
+    ex_board = (request.args.get("ex_board", "1") == "1")  # 北交所/科创板
+    min_amount = float(request.args.get("min_amount", "5000")) * 1e4  # 万元 -> 元
+    limit = int(request.args.get("limit", "100"))
+
+    if not Path(STOCK_META_DB).exists():
+        return jsonify({"error": "stock_meta.db 不存在", "hits": []}), 503
+    meta = pd.read_sql(
+        "SELECT code, ts_code, name, industry, list_date FROM stock_meta WHERE list_status='L'",
+        sqlite3.connect(STOCK_META_DB),
+    )
+    today = datetime.now()
+    one_year_ago = (today - timedelta(days=365)).strftime("%Y-%m-%d")
+
+    hits = []
+    scanned = 0
+    for r in meta.itertuples(index=False):
+        code, name = r.code, (r.name or "")
+        if ex_st and "ST" in name.upper():
+            continue
+        if ex_board and (code.startswith("bj") or code.startswith("sh688")):
+            continue
+        if ex_new and r.list_date and r.list_date > one_year_ago:
+            continue
+        w = _weekly_ohlc(code)
+        if w is None:
+            continue
+        # 流动性: 近 12 周日均成交额估算 (周成交额 = close*周成交量(手)*100, /5 得日均)
+        avg_daily_amount = float((w["close"][-12:] * w["volume"][-12:]).mean()) * 100 / 5.0
+        if avg_daily_amount < min_amount:
+            continue
+        scanned += 1
+        det = _detect_cup_handle(w, p)
+        if det is None:
+            continue
+        det.update({"code": code, "ts_code": r.ts_code, "name": name,
+                    "industry": r.industry or ""})
+        hits.append(det)
+
+    # RS: 26周收益在命中股内的百分位 (1-99)
+    rets = sorted(h["ret_26w"] for h in hits if h.get("ret_26w") is not None)
+    for h in hits:
+        v = h.get("ret_26w")
+        if v is None or not rets:
+            h["rs"] = None
+        else:
+            rank = sum(1 for x in rets if x <= v) / len(rets)
+            h["rs"] = int(round(1 + rank * 98))
+
+    hits.sort(key=lambda x: x["score"], reverse=True)
+    return jsonify({
+        "hits": hits[:limit],
+        "total_matched": len(hits),
+        "scanned": scanned,
+        "today": today.strftime("%Y-%m-%d"),
     })
 
 
