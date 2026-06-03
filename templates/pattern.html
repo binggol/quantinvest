@@ -180,9 +180,21 @@ async function loadMiniKline(hit) {
   }
 }
 
+// 把缩放窗口定位到"左杯沿前留一点 ~ 至今", 让杯柄填满视图
+function frameStart(dates, leftRim) {
+  if (!leftRim || dates.length < 2) return 50;
+  let li = dates.findIndex(x => x >= leftRim);
+  if (li < 0) li = 0;
+  const n = dates.length;
+  const lead = Math.round(0.15 * (n - 1 - li));   // 杯前再留 ~15% 做上下文
+  const startIdx = Math.max(0, li - lead);
+  return Math.max(0, Math.min(95, startIdx / (n - 1) * 100));
+}
+
 function drawMini(d, hit) {
   const kdata = d.dates.map((_, i) => [d.open[i], d.close[i], d.low[i], d.high[i]]);
   const up = "#ef4444", down = "#22c55e";
+  const zs = frameStart(d.dates, hit.left_rim);
   // 买点仅在前复权下与 hit.pivot 同口径(检测基于 qfq); 其他复权不画线避免误导
   const showPivot = (d.adjust === "qfq");
   const candle = {
@@ -217,8 +229,8 @@ function drawMini(d, hit) {
         axisTick: { show: false }, splitLine: { show: false } },
     ],
     dataZoom: [
-      { type: "inside", xAxisIndex: [0, 1], start: 60, end: 100 },
-      { show: true, xAxisIndex: [0, 1], type: "slider", top: "93%", start: 60, end: 100 },
+      { type: "inside", xAxisIndex: [0, 1], start: zs, end: 100 },
+      { show: true, xAxisIndex: [0, 1], type: "slider", top: "93%", start: zs, end: 100 },
     ],
     series: [
       candle,
