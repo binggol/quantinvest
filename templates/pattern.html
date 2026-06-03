@@ -103,7 +103,7 @@ async function runScan() {
     ex_st: document.getElementById("ex-st").checked ? "1" : "0",
     ex_new: document.getElementById("ex-new").checked ? "1" : "0",
     ex_board: document.getElementById("ex-board").checked ? "1" : "0",
-    limit: "100",
+    limit: "500",
   });
   try {
     const r = await fetch("/api/pattern?" + qs.toString());
