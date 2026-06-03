@@ -9,6 +9,7 @@ Endpoints:
 """
 
 import os
+import json
 import sqlite3
 import logging
 import threading
@@ -28,6 +29,7 @@ QLIB_DATA_PATH = Path(os.environ.get("QLIB_DATA_PATH", "/app/qlib_data/cn_data")
 PARQUET_DIR = Path(os.environ.get("PARQUET_DIR", "/app/qlib_data/csv_tmp/tushare_daily"))
 STOCK_META_DB = os.environ.get("STOCK_META_DB", "/app/data/stock_meta.db")
 FINANCIALS_DB = os.environ.get("FINANCIALS_DB", "/app/data/financials.db")
+PREDICT_JSON = Path(STOCK_META_DB).parent / "predictions.json"  # qlib 预测结果
 TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN", "")
 DAILY_HOUR = int(os.environ.get("DAILY_UPDATE_HOUR", "21"))
 DAILY_MINUTE = int(os.environ.get("DAILY_UPDATE_MINUTE", "0"))
@@ -945,6 +947,56 @@ def pattern_query():
     })
 
 
+# ============================================================
+#  /api/predict  qlib 下一交易日买入清单
+# ============================================================
+
+_predict_job = {"running": False, "status": "", "started": None}
+
+
+@app.route("/predict")
+def predict_page():
+    return render_template("predict.html")
+
+
+@app.route("/api/predict")
+def api_predict():
+    if not PREDICT_JSON.exists():
+        return jsonify({"hits": [], "job": _predict_job,
+                        "message": "尚无预测结果, 点「更新数据并预测」生成"})
+    try:
+        data = json.loads(PREDICT_JSON.read_text(encoding="utf-8"))
+    except Exception as e:
+        return jsonify({"hits": [], "job": _predict_job, "message": f"读取预测失败: {e}"})
+    data["job"] = _predict_job
+    return jsonify(data)
+
+
+def _run_predict_job(retrain: bool):
+    global _predict_job
+    _predict_job = {"running": True,
+                    "status": ("更新数据 + 重训模型 + 预测中..." if retrain else "更新数据 + 预测中..."),
+                    "started": datetime.now().strftime("%H:%M:%S")}
+    try:
+        from scripts.predict_qlib import update_and_predict
+        update_and_predict(retrain=retrain)
+        _predict_job = {"running": False, "status": "完成",
+                        "started": _predict_job["started"]}
+    except Exception as e:
+        log.exception("predict job failed")
+        _predict_job = {"running": False, "status": f"失败: {e}",
+                        "started": _predict_job.get("started")}
+
+
+@app.route("/api/predict/run")
+def api_predict_run():
+    if _predict_job.get("running"):
+        return jsonify({"ok": False, "message": "已有预测任务在运行中"})
+    retrain = (request.args.get("retrain", "0") == "1")
+    threading.Thread(target=_run_predict_job, args=(retrain,), daemon=True).start()
+    return jsonify({"ok": True, "message": "已启动: 更新数据并预测" + ("(含重训)" if retrain else "")})
+
+
 @app.route("/api/health")
 def health():
     return jsonify({
@@ -1042,8 +1094,24 @@ def run_daily_update():
             meta_main(force=False)  # refresh weekly per STOCK_META_REFRESH_DAYS
         except Exception as e:
             log.warning(f"stock_meta refresh skipped: {e}")
+        # 数据更新后, 自动预测下一交易日买入清单 (用已存模型, 不重训)
+        try:
+            from scripts.predict_qlib import predict_and_save
+            predict_and_save()
+        except Exception as e:
+            log.warning(f"qlib 预测跳过: {e}")
     except Exception as e:
         log.exception(f"daily update failed: {e}")
+
+
+def run_weekly_predict_retrain():
+    log.info("=== weekly qlib retrain + predict triggered ===")
+    try:
+        from scripts.predict_qlib import update_and_predict
+        update_and_predict(retrain=True)
+        log.info("=== weekly qlib retrain succeeded ===")
+    except Exception as e:
+        log.exception(f"weekly qlib retrain failed: {e}")
 
 
 def run_weekly_financials_update():
@@ -1073,9 +1141,17 @@ def init_scheduler():
         max_instances=1,
         coalesce=True,
     )
+    # 每周日凌晨 03:00 重训 qlib 预测模型 (平时每日用已存模型预测即可)
+    sched.add_job(
+        run_weekly_predict_retrain,
+        CronTrigger(day_of_week="sun", hour=3, minute=0),
+        id="weekly_predict_retrain",
+        max_instances=1,
+        coalesce=True,
+    )
     sched.start()
     log.info(f"scheduler started: daily update at {DAILY_HOUR:02d}:{DAILY_MINUTE:02d}, "
-             f"weekly financials at Mon 02:00 (Asia/Shanghai)")
+             f"weekly financials Mon 02:00, weekly qlib retrain Sun 03:00 (Asia/Shanghai)")
 
 
 def boot_stock_meta():

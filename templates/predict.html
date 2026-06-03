@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>quantinvest · 下一日预测</title>
+<link rel="stylesheet" href="/static/style.css"/>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+</head>
+<body>
+<header class="screen-header">
+  <h1>🧠 quantinvest</h1>
+  <nav class="topnav">
+    <a href="/">K线浏览</a>
+    <a href="/screen">选股</a>
+    <a href="/pattern">杯柄形态</a>
+    <a href="/predict" class="active">下一日预测</a>
+  </nav>
+  <div class="meta" id="meta">qlib + LightGBM 预测下一交易日相对强弱, 取 Top 50 (仅研究参考, 非投资建议)</div>
+</header>
+
+<div class="screen-layout">
+  <aside class="screen-side">
+    <div class="screen-criteria">
+      <h3>🧠 预测</h3>
+      <div class="c-row" id="pred-info">加载中...</div>
+      <button id="btn-predict">🔄 更新数据并预测</button>
+      <button id="btn-retrain" style="background:#7c2d12;margin-top:6px;">🧠 重训模型 + 预测 (慢)</button>
+      <div id="job-stat" class="hit-stat"></div>
+      <div class="c-row" style="color:#64748b;font-size:11px;margin-top:8px;">
+        标签 = 下一交易日收益; 模型每周日 03:00 自动重训, 每日 21:00 数据更新后自动预测。
+      </div>
+    </div>
+    <div class="screen-results">
+      <table id="result-table">
+        <thead id="result-thead"></thead>
+        <tbody id="result-tbody"></tbody>
+      </table>
+    </div>
+  </aside>
+
+  <main class="screen-main">
+    <div class="mini-controls">
+      <label class="ctrl-group">复权:
+        <select id="mini-adjust">
+          <option value="qfq" selected>前复权</option>
+          <option value="hfq">后复权</option>
+          <option value="none">不复权</option>
+        </select>
+      </label>
+    </div>
+    <div class="kline-mini-header" id="kline-mini-header">点击左侧某只股票, 在这里看 K 线</div>
+    <div id="chart-mini"></div>
+    <div class="hint">↑/↓ 在结果表里切换股票</div>
+  </main>
+</div>
+
+<script>
+const $info = document.getElementById("pred-info");
+const $jobStat = document.getElementById("job-stat");
+const $thead = document.getElementById("result-thead");
+const $tbody = document.getElementById("result-tbody");
+const $miniHeader = document.getElementById("kline-mini-header");
+const $miniAdjust = document.getElementById("mini-adjust");
+const $btnPredict = document.getElementById("btn-predict");
+const $btnRetrain = document.getElementById("btn-retrain");
+const chart = echarts.init(document.getElementById("chart-mini"));
+window.addEventListener("resize", () => chart.resize());
+if (window.ResizeObserver) new ResizeObserver(() => chart.resize()).observe(document.getElementById("chart-mini"));
+
+let results = [], selectedIdx = -1, pollTimer = null, lastGen = "";
+
+$miniAdjust.addEventListener("change", () => {
+  if (selectedIdx >= 0 && results[selectedIdx]) loadMiniKline(results[selectedIdx]);
+});
+$btnPredict.addEventListener("click", () => runPredict(false));
+$btnRetrain.addEventListener("click", () => runPredict(true));
+
+async function loadPrediction() {
+  try {
+    const r = await fetch("/api/predict");
+    const j = await r.json();
+    renderInfo(j);
+    const job = j.job || {};
+    if (job.running) {
+      $jobStat.innerHTML = `<span class="warn">⏳ ${job.status} (started ${job.started || ""})</span>`;
+      $btnPredict.disabled = $btnRetrain.disabled = true;
+      if (!pollTimer) pollTimer = setInterval(loadPrediction, 5000);
+    } else {
+      $btnPredict.disabled = $btnRetrain.disabled = false;
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      if (job.status) $jobStat.textContent = job.status;
+    }
+    if (j.hits && j.generated_at !== lastGen) {
+      lastGen = j.generated_at;
+      results = j.hits;
+      renderTable();
+      if (results.length > 0 && selectedIdx < 0) selectRow(0);
+    } else if (j.message && (!j.hits || !j.hits.length)) {
+      $jobStat.textContent = job.running ? $jobStat.textContent : j.message;
+    }
+  } catch (e) {
+    $jobStat.innerHTML = `<span class="warn">⚠️ ${e.message}</span>`;
+  }
+}
+
+function renderInfo(j) {
+  if (!j.as_of) { $info.textContent = "尚无预测结果"; return; }
+  $info.innerHTML = `基于 <b>${j.as_of}</b> 数据 · 预测下一交易日<br>` +
+    `因子 ${j.n_factors} 个 · 生成于 ${j.generated_at || "?"}`;
+}
+
+async function runPredict(retrain) {
+  $btnPredict.disabled = $btnRetrain.disabled = true;
+  $jobStat.textContent = "启动中...";
+  try {
+    const r = await fetch("/api/predict/run?retrain=" + (retrain ? "1" : "0"));
+    const j = await r.json();
+    $jobStat.textContent = j.message || "";
+    setTimeout(loadPrediction, 1500);
+  } catch (e) {
+    $jobStat.innerHTML = `<span class="warn">⚠️ ${e.message}</span>`;
+    $btnPredict.disabled = $btnRetrain.disabled = false;
+  }
+}
+
+function renderTable() {
+  $thead.innerHTML = `<tr><th>#</th><th>代码</th><th>名称</th><th>行业</th>
+    <th title="模型预测分(越高越强)">模型分</th><th>现价</th></tr>`;
+  $tbody.innerHTML = "";
+  results.forEach((h, i) => {
+    const row = document.createElement("tr");
+    row.dataset.idx = i;
+    row.innerHTML = `<td>${h.rank ?? i + 1}</td>
+      <td class="code">${h.code}</td><td>${h.name || ""}</td>
+      <td class="industry">${h.industry || ""}</td>
+      <td class="num roe">${h.score?.toFixed ? h.score.toFixed(3) : h.score}</td>
+      <td class="num">${h.close == null ? "—" : h.close.toFixed(2)}</td>`;
+    row.addEventListener("click", () => selectRow(i));
+    $tbody.appendChild(row);
+  });
+}
+
+function selectRow(i) {
+  if (i < 0 || i >= results.length) return;
+  const prev = $tbody.querySelector("tr.selected");
+  if (prev) prev.classList.remove("selected");
+  const row = $tbody.querySelector(`tr[data-idx="${i}"]`);
+  if (row) { row.classList.add("selected"); row.scrollIntoView({ block: "nearest", behavior: "smooth" }); }
+  selectedIdx = i;
+  loadMiniKline(results[i]);
+}
+
+async function loadMiniKline(hit) {
+  $miniHeader.textContent = `${hit.name} · ${hit.code}  (加载中...)`;
+  try {
+    const adjust = $miniAdjust.value;
+    const r = await fetch(`/api/kline?code=${hit.code}&days=0&adjust=${adjust}&refresh=0`);
+    if (!r.ok) { const j = await r.json().catch(() => ({})); throw new Error(j.error || ("HTTP " + r.status)); }
+    const d = await r.json();
+    drawMini(d);
+    const adjLabel = { qfq: "前复权", hfq: "后复权", none: "不复权" }[d.adjust] || d.adjust;
+    $miniHeader.textContent = `${hit.name} · ${hit.code} · ${hit.industry || ""} · ${adjLabel} · 模型分 ${hit.score}`;
+  } catch (e) {
+    $miniHeader.textContent = "K 线加载失败: " + e.message;
+  }
+}
+
+function drawMini(d) {
+  const kdata = d.dates.map((_, i) => [d.open[i], d.close[i], d.low[i], d.high[i]]);
+  const up = "#ef4444", down = "#22c55e";
+  chart.setOption({
+    animation: false,
+    tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
+    legend: { data: ["K线", "MA5", "MA10", "MA20", "MA60"], top: 0 },
+    grid: [
+      { left: 50, right: 15, top: 30, height: "58%" },
+      { left: 50, right: 15, top: "72%", height: "18%" },
+    ],
+    xAxis: [
+      { type: "category", data: d.dates, scale: true, boundaryGap: false,
+        axisLine: { onZero: false }, splitLine: { show: false }, axisLabel: { show: false } },
+      { type: "category", gridIndex: 1, data: d.dates, scale: true, boundaryGap: false,
+        axisLine: { onZero: false }, axisTick: { show: false }, splitLine: { show: false }, axisLabel: { fontSize: 10 } },
+    ],
+    yAxis: [
+      { scale: true, splitArea: { show: true } },
+      { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, axisLine: { show: false },
+        axisTick: { show: false }, splitLine: { show: false } },
+    ],
+    dataZoom: [
+      { type: "inside", xAxisIndex: [0, 1], start: 60, end: 100 },
+      { show: true, xAxisIndex: [0, 1], type: "slider", top: "93%", start: 60, end: 100 },
+    ],
+    series: [
+      { name: "K线", type: "candlestick", data: kdata,
+        itemStyle: { color: up, color0: down, borderColor: up, borderColor0: down } },
+      makeMA("MA5", d.close, 5), makeMA("MA10", d.close, 10),
+      makeMA("MA20", d.close, 20), makeMA("MA60", d.close, 60),
+      { name: "Volume", type: "bar", xAxisIndex: 1, yAxisIndex: 1,
+        data: d.volume.map((v, i) => ({ value: v, itemStyle: { color: d.close[i] >= d.open[i] ? up : down } })) },
+    ],
+  }, true);
+}
+
+function makeMA(name, closes, win) {
+  const data = closes.map((_, i) => {
+    if (i < win - 1) return "-";
+    let s = 0; for (let k = 0; k < win; k++) s += closes[i - k];
+    return +(s / win).toFixed(3);
+  });
+  return { name, type: "line", data, smooth: true, showSymbol: false, lineStyle: { width: 1 } };
+}
+
+document.addEventListener("keydown", (e) => {
+  if (results.length === 0) return;
+  const tag = (document.activeElement && document.activeElement.tagName) || "";
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === "ArrowDown") { e.preventDefault(); selectRow(Math.min(results.length - 1, selectedIdx + 1)); }
+  else if (e.key === "ArrowUp") { e.preventDefault(); selectRow(Math.max(0, selectedIdx - 1)); }
+});
+
+loadPrediction();
+</script>
+</body>
+</html>

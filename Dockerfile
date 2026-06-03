@@ -2,15 +2,16 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# system deps (timezone for cron-like scheduling)
+# system deps (timezone + 编译 qlib/lightgbm 所需的 gcc/g++)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    tzdata curl \
+    tzdata curl build-essential \
     && rm -rf /var/lib/apt/lists/*
 ENV TZ=Asia/Shanghai
 
-# python deps
+# python deps (先装 Cython/numpy, 便于 pyqlib 从源码构建时找到)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir Cython "numpy==1.26.4" \
+    && pip install --no-cache-dir -r requirements.txt
 
 # app code
 COPY app.py ./

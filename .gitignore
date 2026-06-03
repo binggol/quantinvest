@@ -6,7 +6,13 @@ __pycache__/
 venv/
 data/*.db
 data/*.db-*
+data/qlib_model.pkl
+data/predictions.json
+data/factors.json
 *.log
+mlruns/
+_tmp*/
+_ptest*
 .DS_Store
 .vscode/
 .idea/

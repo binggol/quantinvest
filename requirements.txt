@@ -5,3 +5,8 @@ numpy==1.26.4
 pypinyin==0.51.0
 tushare==1.4.6
 pyarrow==16.1.0
+# qlib 预测 (下一日买入清单). 注意: 这几个会让镜像变大, 且 pyqlib 安装可能要编译
+scipy==1.13.1
+scikit-learn==1.5.1
+lightgbm==4.6.0
+pyqlib==0.9.6
