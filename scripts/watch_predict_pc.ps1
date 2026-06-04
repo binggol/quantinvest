@@ -89,6 +89,12 @@ while ($true) {
       Write-RdStatus "error" "robocopy failed $LASTEXITCODE"
       Write-Host "[watch] RD-Agent robocopy failed $LASTEXITCODE" -ForegroundColor Red
     } else {
+      if (-not $env:TUSHARE_TOKEN -and (Test-Path "$proj\data\.tushare_token")) {
+        $env:TUSHARE_TOKEN = (Get-Content "$proj\data\.tushare_token" -Raw).Trim()
+      }
+      # 1.5) 重建 csi300 universe (Windows python). 否则成分股 end_date 过时 -> 最新交易日股池缩水
+      Write-RdStatus "running" "rebuild csi300 universe"
+      Push-Location "C:\rdagent"; python build_csi300.py; Pop-Location
       # 2) predict_next_day 在 WSL(miniconda rdagent env, 有 qlib) 跑, 用 /mnt 路径
       Write-RdStatus "running" "predict (WSL retrain ~15min)"
       wsl -e bash -lc "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent && cd /mnt/c/rdagent && python predict_next_day.py"
