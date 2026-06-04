@@ -114,7 +114,7 @@ while ($true) {
       if (-not (Test-Path "C:\rdagent\daily_logs")) { New-Item -ItemType Directory -Force "C:\rdagent\daily_logs" | Out-Null }
       Write-RdStatus "running" "mine: rdagent fin_factor loop_n=$rdLoopN (~几小时)"
       Push-Location "C:\rdagent"
-      & "D:\anaconda3\Scripts\rdagent.exe" fin_factor --loop_n $rdLoopN 2>&1 | Out-File -FilePath $mineLog -Encoding utf8
+      & "D:\anaconda3\Scripts\rdagent.exe" fin_factor --loop-n $rdLoopN 2>&1 | Out-File -FilePath $mineLog -Encoding utf8
       $mineExit = $LASTEXITCODE
       Pop-Location
       Remove-Item Env:\LOG_TRACE_PATH -ErrorAction SilentlyContinue
