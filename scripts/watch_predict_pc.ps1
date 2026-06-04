@@ -81,11 +81,16 @@ while ($true) {
   }
 
   if (Test-Path $rdReqFile) {
-    # retrain flag from the web button: $true = full retrain (slow), $false = reuse cached model (fast)
-    $rdRetrain = $true
-    try { $rr = (Get-Content $rdReqFile -Raw | ConvertFrom-Json); if ($null -ne $rr.retrain) { $rdRetrain = [bool]$rr.retrain } } catch {}
+    # request flags: retrain ($true=full retrain, $false=reuse cached); batch=因子批次标签(空=默认)
+    $rdRetrain = $false   # web 默认快速预测(复用缓存); 缓存不存在时 predict_next_day 自动回退重训
+    $rdBatch = ""
+    try {
+      $rr = (Get-Content $rdReqFile -Raw | ConvertFrom-Json)
+      if ($null -ne $rr.retrain) { $rdRetrain = [bool]$rr.retrain }
+      if ($null -ne $rr.batch)   { $rdBatch = [string]$rr.batch }
+    } catch {}
     $rdMode = if ($rdRetrain) { "1" } else { "0" }
-    Write-Host "[watch] RD-Agent request (retrain=$rdRetrain): sync data + predict..." -ForegroundColor Yellow
+    Write-Host "[watch] RD-Agent request (retrain=$rdRetrain batch='$rdBatch'): sync data + predict..." -ForegroundColor Yellow
     Write-RdStatus "running" "sync data (robocopy Z->C)"
     # 1) Windows robocopy 同步 Z->C (快; WSL rsync 走 /mnt/z 网络盘太慢). 源用 UNC, 不依赖盘符。
     robocopy "$qlibData" "C:\qlib_data\cn_data" /MIR /MT:8 /R:1 /W:2 /XF csi300.txt csi300.txt.bak /NFL /NDL /NJH /NP | Out-Null
@@ -101,9 +106,10 @@ while ($true) {
       Push-Location "C:\rdagent"; python build_csi300.py; Pop-Location
       # 2) predict_next_day 在 WSL(miniconda rdagent env, 有 qlib) 跑, 用 /mnt 路径
       #    RDAGENT_RETRAIN=1 全量重训(~15min); =0 复用缓存模型只预测(快)
-      $stepMsg = if ($rdRetrain) { "predict (WSL full retrain ~15min)" } else { "predict (WSL no-retrain, cached model)" }
+      $stepMsg = if ($rdRetrain) { "predict (WSL full retrain)" } else { "predict (WSL no-retrain, cached model)" }
+      if ($rdBatch) { $stepMsg += " [batch=$rdBatch]" }
       Write-RdStatus "running" $stepMsg
-      wsl -e bash -lc "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent && cd /mnt/c/rdagent && RDAGENT_RETRAIN=$rdMode python predict_next_day.py"
+      wsl -e bash -lc "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent && cd /mnt/c/rdagent && RDAGENT_RETRAIN=$rdMode RDAGENT_FACTOR_BATCH='$rdBatch' python predict_next_day.py"
       if ($LASTEXITCODE -ne 0) {
         Write-RdStatus "error" "predict_next_day exit $LASTEXITCODE"
         Write-Host "[watch] RD-Agent predict failed $LASTEXITCODE" -ForegroundColor Red

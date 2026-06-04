@@ -32,8 +32,10 @@
     <div class="screen-criteria">
       <h3>🔬 RD-Agent</h3>
       <div class="c-row" id="rd-info">加载中...</div>
-      <button id="btn-fast" style="margin-top:8px;">⚡ 快速预测 (复用模型)</button>
-      <button id="btn-retrain" style="margin-top:6px;">🔄 完整重训 + 预测</button>
+      <label style="display:block;margin-top:8px;color:#cbd5e1;font-size:12px;">因子批次:
+        <select id="batch-sel" style="width:100%;margin-top:3px;"></select>
+      </label>
+      <button id="btn-fast" style="margin-top:8px;">⚡ 快速预测 (用所选批次)</button>
       <div id="rd-stat" class="hit-stat"></div>
       <div style="color:#cbd5e1;font-size:12px;margin-top:6px;">有效因子 (<span id="nf">0</span>):</div>
       <div class="factor-chips" id="factor-chips"></div>
@@ -81,18 +83,36 @@ if (window.ResizeObserver) new ResizeObserver(() => chart.resize()).observe(docu
 
 let results = [], selectedIdx = -1, pollTimer = null, lastGen = "";
 const $btnFast = document.getElementById("btn-fast");
-const $btnRetrain = document.getElementById("btn-retrain");
+const $batchSel = document.getElementById("batch-sel");
 const $rdStat = document.getElementById("rd-stat");
-function setBtns(disabled) { $btnFast.disabled = disabled; $btnRetrain.disabled = disabled; }
+let batchData = { batches: [], default_factors: [], default_n: 0 };
+function setBtns(disabled) { $btnFast.disabled = disabled; }
 $miniAdjust.addEventListener("change", () => { if (selectedIdx >= 0) loadMiniKline(results[selectedIdx]); });
 $btnFast.addEventListener("click", () => runRefresh(false));
-$btnRetrain.addEventListener("click", () => runRefresh(true));
+$batchSel.addEventListener("change", showBatchFactors);
+
+async function loadBatches() {
+  try { batchData = await (await fetch("/api/rdagent/batches")).json(); }
+  catch (e) { batchData = { batches: [], default_factors: [], default_n: 0 }; }
+  const opts = [`<option value="">默认 (最新, ${batchData.default_n||0} 因子)</option>`]
+    .concat((batchData.batches||[]).map(b => `<option value="${b.label}">${b.label} (${b.n_factors} 因子)</option>`));
+  $batchSel.innerHTML = opts.join("");
+}
+// 左侧 chips 跟随下拉所选批次展示其有效因子
+function showBatchFactors() {
+  const v = $batchSel.value;
+  let factors = batchData.default_factors || [];
+  if (v) { const b = (batchData.batches||[]).find(x => x.label === v); if (b) factors = b.factors; }
+  $nf.textContent = factors.length;
+  $chips.innerHTML = factors.map(f => `<span>${f}</span>`).join("");
+}
 
 async function runRefresh(retrain) {
   setBtns(true);
   $rdStat.textContent = "启动中...";
   try {
-    const j = await (await fetch("/api/rdagent/request?retrain=" + (retrain ? 1 : 0))).json();
+    const url = `/api/rdagent/request?retrain=${retrain?1:0}&batch=${encodeURIComponent($batchSel.value)}`;
+    const j = await (await fetch(url)).json();
     $rdStat.textContent = j.message || "";
     setTimeout(load, 1500);
   } catch (e) { $rdStat.innerHTML = `<span class="warn">⚠️ ${e.message}</span>`; setBtns(false); }
@@ -115,8 +135,7 @@ async function load() {
     if (j.generated_at !== undefined && j.generated_at !== lastGen) lastGen = j.generated_at;
     if ((!j.hits || !j.hits.length) && j.message) { $info.innerHTML = `<span class="warn">${j.message}</span>`; return; }
     $info.innerHTML = `基于 <b>${j.as_of || "?"}</b> 数据 · 预测下一交易日<br><span style="color:#64748b">${j.source || ""}</span>`;
-    $nf.textContent = j.n_factors || (j.factors || []).length;
-    $chips.innerHTML = (j.factors || []).map(f => `<span>${f}</span>`).join("");
+    showBatchFactors();   // chips 跟随所选因子批次
     $report.textContent = j.report || "(无报告)";
     results = j.hits || [];
     renderTable();
@@ -190,7 +209,7 @@ document.addEventListener("keydown",(e)=>{
   if(e.key==="ArrowDown"){e.preventDefault();selectRow(Math.min(results.length-1,selectedIdx+1));}
   else if(e.key==="ArrowUp"){e.preventDefault();selectRow(Math.max(0,selectedIdx-1));}
 });
-load();
+loadBatches().then(() => { showBatchFactors(); load(); });
 </script>
 </body>
 </html>

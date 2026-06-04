@@ -40,6 +40,7 @@ PREDICT_STATUS = PREDICT_JSON.parent / "predict_status.json"
 RDAGENT_JSON = PREDICT_JSON.parent / "rdagent.json"
 RDAGENT_REQUEST = PREDICT_JSON.parent / "rdagent_request.json"   # 网页按钮触发
 RDAGENT_STATUS = PREDICT_JSON.parent / "rdagent_status.json"     # PC 监听回写
+RDAGENT_BATCHES = PREDICT_JSON.parent / "rdagent_batches.json"   # 可选的有效因子批次索引 (PC 端导出)
 TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN", "")
 DAILY_HOUR = int(os.environ.get("DAILY_UPDATE_HOUR", "21"))
 DAILY_MINUTE = int(os.environ.get("DAILY_UPDATE_MINUTE", "0"))
@@ -1071,25 +1072,36 @@ def api_rdagent():
     return jsonify(data)
 
 
+@app.route("/api/rdagent/batches")
+def api_rdagent_batches():
+    """列出可选的有效因子批次 (PC 端 export_rdagent.py 写出的索引). 供网页下拉选择."""
+    data = _read_json(RDAGENT_BATCHES)
+    if not data:
+        return jsonify({"batches": [], "default_factors": [], "default_n": 0})
+    return jsonify(data)
+
+
 @app.route("/api/rdagent/request")
 def api_rdagent_request():
     """网页按钮触发: 更新数据 + 预测. PC 监听脚本执行.
-    retrain=1 (默认): 全量重训模型 (慢, 约 20-40 分钟);
-    retrain=0       : 复用缓存模型只预测 (快, 几分钟)."""
+    retrain=1: 全量重训模型; retrain=0 (默认): 复用缓存模型只预测 (快).
+    batch=<标签>: 用指定批次的有效因子 (空=默认 effective_factors.json)."""
     if RDAGENT_REQUEST.exists():
         return jsonify({"ok": False, "message": "已有 RD-Agent 任务在排队/处理中"})
-    retrain = (request.args.get("retrain", "1").strip().lower() not in ("0", "false", "no", ""))
+    retrain = (request.args.get("retrain", "0").strip().lower() not in ("0", "false", "no", ""))
+    batch = (request.args.get("batch", "") or "").strip()
     try:
         RDAGENT_REQUEST.parent.mkdir(parents=True, exist_ok=True)
         RDAGENT_REQUEST.write_text(json.dumps(
-            {"requested_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "retrain": retrain},
+            {"requested_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "retrain": retrain, "batch": batch},
             ensure_ascii=False),
             encoding="utf-8")
     except Exception as e:
         return jsonify({"ok": False, "message": f"写请求失败: {e}"})
+    bmsg = f" [批次 {batch}]" if batch else ""
     if retrain:
-        return jsonify({"ok": True, "message": "已通知 PC: 更新数据 + 全量重训 + 预测 (较慢, 约 20-40 分钟)"})
-    return jsonify({"ok": True, "message": "已通知 PC: 更新数据 + 复用模型预测 (较快, 约几分钟)"})
+        return jsonify({"ok": True, "message": f"已通知 PC: 更新数据 + 全量重训 + 预测{bmsg}"})
+    return jsonify({"ok": True, "message": f"已通知 PC: 更新数据 + 复用模型预测{bmsg} (首次该批次会自动重训一次)"})
 
 
 @app.route("/api/health")
