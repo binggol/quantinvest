@@ -1234,11 +1234,22 @@ def boot_freshness_catchup():
                 return
             should = opens[-1]
             should_iso = f"{should[:4]}-{should[4:6]}-{should[6:]}"
-            if cal[-1] < should_iso:
-                log.info(f"启动检查: 数据落后 (bin 至 {cal[-1]} < 应有 {should_iso}), 后台补更新")
+            # 日历可能被"看K线时按需补数"提前, 不代表全市场; 用一批股票实际 bin 末日期的中位数判断
+            sample = []
+            try:
+                dirs = [d.name for d in (QLIB_DATA_PATH / "features").iterdir() if d.is_dir()]
+                for code in dirs[:80]:
+                    si, v = _read_bin(code, "close")
+                    if v.size and si + v.size - 1 < len(cal):
+                        sample.append(cal[si + v.size - 1])
+            except Exception:
+                pass
+            ref = sorted(sample)[len(sample) // 2] if sample else cal[-1]   # 中位数末日期
+            if ref < should_iso:
+                log.info(f"启动检查: 全市场数据落后 (样本中位 {ref} < 应有 {should_iso}), 后台补全量更新")
                 run_daily_update()
             else:
-                log.info(f"启动检查: 数据已最新 (bin 至 {cal[-1]})")
+                log.info(f"启动检查: 数据已最新 (样本中位 {ref})")
         except Exception as e:
             log.warning(f"启动数据新鲜度检查跳过: {e}")
     # 放后台线程, 不阻塞 Flask 启动 (全量更新可能较久)
