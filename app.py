@@ -1176,6 +1176,7 @@ def init_scheduler():
         id="daily_update",
         max_instances=1,
         coalesce=True,
+        misfire_grace_time=6 * 3600,   # 21:00 错过 6 小时内仍补跑 (防调度繁忙/短暂延迟)
     )
     # 每周一凌晨 02:00 跑财务数据更新 (财报披露集中在工作日, 周更细够用)
     sched.add_job(
@@ -1208,8 +1209,45 @@ def boot_stock_meta():
         log.warning(f"initial stock_meta build skipped: {e}")
 
 
+def boot_freshness_catchup():
+    """启动时检查 bin 数据是否落后于'最近应有数据的交易日', 落后就后台补一次更新。
+
+    防止夜间 21:00 任务因容器重启/停机被跳过 (APScheduler 不补跑错过的任务)。
+    判定: 取最近交易日历; 今日若是交易日且已过 16:00 则应有今日数据, 否则到上一交易日。
+    """
+    def _check():
+        try:
+            cal = _read_calendar()
+            if not cal:
+                return
+            now = datetime.now()
+            pro = _tushare_api()
+            start = (now - timedelta(days=12)).strftime("%Y%m%d")
+            dfc = pro.trade_cal(exchange="SSE", start_date=start,
+                                end_date=now.strftime("%Y%m%d"), is_open="1")
+            opens = sorted(str(d) for d in dfc["cal_date"].tolist())
+            if not opens:
+                return
+            if opens[-1] == now.strftime("%Y%m%d") and now.hour < 16:
+                opens = opens[:-1]      # 今日还没收盘/未发布, 不计今日
+            if not opens:
+                return
+            should = opens[-1]
+            should_iso = f"{should[:4]}-{should[4:6]}-{should[6:]}"
+            if cal[-1] < should_iso:
+                log.info(f"启动检查: 数据落后 (bin 至 {cal[-1]} < 应有 {should_iso}), 后台补更新")
+                run_daily_update()
+            else:
+                log.info(f"启动检查: 数据已最新 (bin 至 {cal[-1]})")
+        except Exception as e:
+            log.warning(f"启动数据新鲜度检查跳过: {e}")
+    # 放后台线程, 不阻塞 Flask 启动 (全量更新可能较久)
+    threading.Thread(target=_check, daemon=True).start()
+
+
 if __name__ == "__main__":
     boot_stock_meta()
     init_scheduler()
+    boot_freshness_catchup()
     log.info(f"starting Flask on {HOST}:{PORT}")
     app.run(host=HOST, port=PORT, debug=False, use_reloader=False)
