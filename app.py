@@ -38,6 +38,8 @@ PREDICT_REQUEST = PREDICT_JSON.parent / "predict_request.json"
 PREDICT_STATUS = PREDICT_JSON.parent / "predict_status.json"
 # RD-Agent 产出 (有效因子 + 买入清单), 由 PC 的 export_rdagent.py 写到共享目录
 RDAGENT_JSON = PREDICT_JSON.parent / "rdagent.json"
+RDAGENT_REQUEST = PREDICT_JSON.parent / "rdagent_request.json"   # 网页按钮触发
+RDAGENT_STATUS = PREDICT_JSON.parent / "rdagent_status.json"     # PC 监听回写
 TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN", "")
 DAILY_HOUR = int(os.environ.get("DAILY_UPDATE_HOUR", "21"))
 DAILY_MINUTE = int(os.environ.get("DAILY_UPDATE_MINUTE", "0"))
@@ -1060,11 +1062,28 @@ def rdagent_page():
 
 @app.route("/api/rdagent")
 def api_rdagent():
+    extra = {"rd_pending": RDAGENT_REQUEST.exists(), "rd_status": _read_json(RDAGENT_STATUS)}
     data = _read_json(RDAGENT_JSON)
     if data is None:
         return jsonify({"hits": [], "factors": [],
-                        "message": "尚无 RD-Agent 结果; 在 PC 上运行 scripts/export_rdagent.py 生成"})
+                        "message": "尚无 RD-Agent 结果; 点按钮让 PC 跑一次", **extra})
+    data.update(extra)
     return jsonify(data)
+
+
+@app.route("/api/rdagent/request")
+def api_rdagent_request():
+    """网页按钮触发: 更新数据 + RD-Agent 分析有效因子 + 预测. PC 监听脚本执行."""
+    if RDAGENT_REQUEST.exists():
+        return jsonify({"ok": False, "message": "已有 RD-Agent 任务在排队/处理中"})
+    try:
+        RDAGENT_REQUEST.parent.mkdir(parents=True, exist_ok=True)
+        RDAGENT_REQUEST.write_text(json.dumps(
+            {"requested_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}, ensure_ascii=False),
+            encoding="utf-8")
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"写请求失败: {e}"})
+    return jsonify({"ok": True, "message": "已通知 PC: 更新数据 + RD-Agent 分析+预测 (较慢, 约 20-40 分钟)"})
 
 
 @app.route("/api/health")

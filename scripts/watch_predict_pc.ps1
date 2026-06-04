@@ -19,6 +19,8 @@ $qlibData = (Split-Path $shared -Parent) + "\cn_data"
 
 $reqFile    = Join-Path $shared "predict_request.json"
 $statusFile = Join-Path $shared "predict_status.json"
+$rdReqFile    = Join-Path $shared "rdagent_request.json"
+$rdStatusFile = Join-Path $shared "rdagent_status.json"
 
 $env:QLIB_DATA_PATH      = $qlibData
 $env:PARQUET_DIR         = Join-Path $shared "tushare_daily"
@@ -30,6 +32,10 @@ $env:PREDICT_TRAIN_START = "2020-01-01"
 function Write-Status($state, $msg) {
   $obj = @{ state = $state; msg = $msg; updated_at = (Get-Date -Format "yyyy-MM-dd HH:mm:ss") }
   ($obj | ConvertTo-Json -Compress) | Out-File -FilePath $statusFile -Encoding utf8
+}
+function Write-RdStatus($state, $msg) {
+  $obj = @{ state = $state; msg = $msg; updated_at = (Get-Date -Format "yyyy-MM-dd HH:mm:ss") }
+  ($obj | ConvertTo-Json -Compress) | Out-File -FilePath $rdStatusFile -Encoding utf8
 }
 
 if (-not (Test-Path $shared)) {
@@ -72,6 +78,18 @@ while ($true) {
       Write-Status "error" $_.Exception.Message
     }
     Remove-Item $reqFile -Force -ErrorAction SilentlyContinue
+  }
+
+  if (Test-Path $rdReqFile) {
+    Write-Host "[watch] RD-Agent request: update data + analyze factors + predict (slow ~20-40min)..." -ForegroundColor Yellow
+    Write-RdStatus "running" "updating data + RD-Agent analysis + predict"
+    $bash = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent && " +
+            "rsync -a --delete --exclude csi300.txt --exclude csi300.txt.bak /mnt/z/claude/qlib/data/cn_data/ /mnt/c/qlib_data/cn_data/ && " +
+            "cd /mnt/c/rdagent && python predict_next_day.py && python post_process.py && python export_rdagent.py"
+    wsl -e bash -lc $bash
+    if ($LASTEXITCODE -eq 0) { Write-RdStatus "done" "done"; Write-Host "[watch] RD-Agent done" -ForegroundColor Green }
+    else { Write-RdStatus "error" "exit $LASTEXITCODE"; Write-Host "[watch] RD-Agent failed (exit $LASTEXITCODE)" -ForegroundColor Red }
+    Remove-Item $rdReqFile -Force -ErrorAction SilentlyContinue
   }
   Start-Sleep -Seconds 15
 }

@@ -32,6 +32,8 @@
     <div class="screen-criteria">
       <h3>🔬 RD-Agent</h3>
       <div class="c-row" id="rd-info">加载中...</div>
+      <button id="btn-refresh" style="margin-top:8px;">🔄 更新数据 + 重新分析+预测</button>
+      <div id="rd-stat" class="hit-stat"></div>
       <div style="color:#cbd5e1;font-size:12px;margin-top:6px;">有效因子 (<span id="nf">0</span>):</div>
       <div class="factor-chips" id="factor-chips"></div>
       <details>
@@ -76,12 +78,37 @@ const chart = echarts.init(document.getElementById("chart-mini"));
 window.addEventListener("resize", () => chart.resize());
 if (window.ResizeObserver) new ResizeObserver(() => chart.resize()).observe(document.getElementById("chart-mini"));
 
-let results = [], selectedIdx = -1;
+let results = [], selectedIdx = -1, pollTimer = null, lastGen = "";
+const $btnRefresh = document.getElementById("btn-refresh");
+const $rdStat = document.getElementById("rd-stat");
 $miniAdjust.addEventListener("change", () => { if (selectedIdx >= 0) loadMiniKline(results[selectedIdx]); });
+$btnRefresh.addEventListener("click", runRefresh);
+
+async function runRefresh() {
+  $btnRefresh.disabled = true;
+  $rdStat.textContent = "启动中...";
+  try {
+    const j = await (await fetch("/api/rdagent/request")).json();
+    $rdStat.textContent = j.message || "";
+    setTimeout(load, 1500);
+  } catch (e) { $rdStat.innerHTML = `<span class="warn">⚠️ ${e.message}</span>`; $btnRefresh.disabled = false; }
+}
 
 async function load() {
   try {
     const j = await (await fetch("/api/rdagent")).json();
+    const st = j.rd_status || null;
+    const busy = j.rd_pending || (st && st.state === "running");
+    if (busy) {
+      $rdStat.innerHTML = `<span class="warn">⏳ ${st && st.state === "running" ? "PC 跑 RD-Agent 中(更新+分析+预测,约20-40分钟)" : "已提交, 等待 PC 开始..."}</span>`;
+      $btnRefresh.disabled = true;
+      if (!pollTimer) pollTimer = setInterval(load, 8000);
+    } else {
+      $btnRefresh.disabled = false;
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      if (st) { const m = {idle:"",done:"上次已完成",error:"RD-Agent 出错: "+(st.msg||"")}; if (m[st.state]) $rdStat.textContent = m[st.state]; }
+    }
+    if (j.generated_at !== undefined && j.generated_at !== lastGen) lastGen = j.generated_at;
     if ((!j.hits || !j.hits.length) && j.message) { $info.innerHTML = `<span class="warn">${j.message}</span>`; return; }
     $info.innerHTML = `基于 <b>${j.as_of || "?"}</b> 数据 · 预测下一交易日<br><span style="color:#64748b">${j.source || ""}</span>`;
     $nf.textContent = j.n_factors || (j.factors || []).length;
@@ -89,7 +116,7 @@ async function load() {
     $report.textContent = j.report || "(无报告)";
     results = j.hits || [];
     renderTable();
-    if (results.length) selectRow(0);
+    if (results.length && selectedIdx < 0) selectRow(0);
   } catch (e) { $info.innerHTML = `<span class="warn">⚠️ ${e.message}</span>`; }
 }
 
