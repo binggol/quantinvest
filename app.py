@@ -1073,17 +1073,23 @@ def api_rdagent():
 
 @app.route("/api/rdagent/request")
 def api_rdagent_request():
-    """网页按钮触发: 更新数据 + RD-Agent 分析有效因子 + 预测. PC 监听脚本执行."""
+    """网页按钮触发: 更新数据 + 预测. PC 监听脚本执行.
+    retrain=1 (默认): 全量重训模型 (慢, 约 20-40 分钟);
+    retrain=0       : 复用缓存模型只预测 (快, 几分钟)."""
     if RDAGENT_REQUEST.exists():
         return jsonify({"ok": False, "message": "已有 RD-Agent 任务在排队/处理中"})
+    retrain = (request.args.get("retrain", "1").strip().lower() not in ("0", "false", "no", ""))
     try:
         RDAGENT_REQUEST.parent.mkdir(parents=True, exist_ok=True)
         RDAGENT_REQUEST.write_text(json.dumps(
-            {"requested_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S")}, ensure_ascii=False),
+            {"requested_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "retrain": retrain},
+            ensure_ascii=False),
             encoding="utf-8")
     except Exception as e:
         return jsonify({"ok": False, "message": f"写请求失败: {e}"})
-    return jsonify({"ok": True, "message": "已通知 PC: 更新数据 + RD-Agent 分析+预测 (较慢, 约 20-40 分钟)"})
+    if retrain:
+        return jsonify({"ok": True, "message": "已通知 PC: 更新数据 + 全量重训 + 预测 (较慢, 约 20-40 分钟)"})
+    return jsonify({"ok": True, "message": "已通知 PC: 更新数据 + 复用模型预测 (较快, 约几分钟)"})
 
 
 @app.route("/api/health")
