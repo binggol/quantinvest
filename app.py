@@ -478,6 +478,13 @@ def load_ohlcv(code: str, last_n_days: int | None = None, adjust: str = "qfq") -
         dates = dates[offset:]
         o, c, h, l, v = o[offset:], c[offset:], h[offset:], l[offset:], v[offset:]
 
+    # 防御: 停牌日在某些 bin 构建脚本里是 NaN; 前向填充, 避免 K线断裂 + jsonify 吐非法 NaN
+    o = pd.Series(o).ffill().bfill().fillna(0).to_numpy()
+    c = pd.Series(c).ffill().bfill().fillna(0).to_numpy()
+    h = pd.Series(h).ffill().bfill().fillna(0).to_numpy()
+    l = pd.Series(l).ffill().bfill().fillna(0).to_numpy()
+    v = np.nan_to_num(np.asarray(v, dtype=float), nan=0.0)
+
     return {
         "dates": dates,
         "open": [round(float(x), 4) for x in o],
