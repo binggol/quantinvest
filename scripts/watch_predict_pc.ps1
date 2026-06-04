@@ -1,19 +1,27 @@
-# PC 常驻监听 (方案B + 网页按钮)。
-# 发现共享目录里的 predict_request.json (由 NAS 网页按钮写入) 就跑预测,
-# 跑完写 predict_status.json, 并删掉请求文件。NAS 网页轮询状态。
+# PC resident watcher (Plan B + web button).
+# Watches the shared folder for predict_request.json (written by the NAS web button),
+# runs the prediction, writes predict_status.json, deletes the request.
+# Uses a UNC path so it does NOT depend on the Z: drive mapping (works in any shell,
+# including elevated PowerShell where mapped drives are not visible).
 #
-# 启动 (开机后跑一次, 一直挂着):
+# Start (keep the window open):
 #   powershell -ExecutionPolicy Bypass -File scripts\watch_predict_pc.ps1
-# Ctrl+C 退出。
+# Ctrl+C to stop.
 
 $ErrorActionPreference = "Continue"
 $proj = Split-Path -Parent $PSScriptRoot
-$shared = "Z:\claude\qlib\data\csv_tmp"
-$reqFile = Join-Path $shared "predict_request.json"
+
+# Shared dir = NAS qlib data 'csv_tmp', via UNC. Adjust the IP if your NAS changes,
+# or override with  $env:SHARED_DIR  before launching.
+$shared = $env:SHARED_DIR
+if (-not $shared) { $shared = "\\192.168.0.106\docker\obsidian\vaults\claude\qlib\data\csv_tmp" }
+$qlibData = (Split-Path $shared -Parent) + "\cn_data"
+
+$reqFile    = Join-Path $shared "predict_request.json"
 $statusFile = Join-Path $shared "predict_status.json"
 
-$env:QLIB_DATA_PATH      = "Z:\claude\qlib\data\cn_data"
-$env:PARQUET_DIR         = "Z:\claude\qlib\data\csv_tmp\tushare_daily"
+$env:QLIB_DATA_PATH      = $qlibData
+$env:PARQUET_DIR         = Join-Path $shared "tushare_daily"
 $env:PREDICT_DATA_DIR    = $shared
 $env:STOCK_META_DB       = Join-Path $proj "data\stock_meta.db"
 $env:QLIB_KERNELS        = "8"
@@ -24,30 +32,32 @@ function Write-Status($state, $msg) {
   ($obj | ConvertTo-Json -Compress) | Out-File -FilePath $statusFile -Encoding utf8
 }
 
+if (-not (Test-Path $shared)) {
+  Write-Host "[watch] shared dir not reachable: $shared" -ForegroundColor Red
+  Write-Host "        check the NAS is online and the UNC path is correct (or set `$env:SHARED_DIR)."
+  exit 1
+}
 if (-not (Test-Path $env:STOCK_META_DB)) {
-  Write-Host "缺少 stock_meta.db, 先构建 (见 run_predict_pc.ps1 提示)" -ForegroundColor Yellow
+  Write-Host "[watch] missing stock_meta.db at $($env:STOCK_META_DB) (build it, see run_predict_pc.ps1)" -ForegroundColor Yellow
   exit 1
 }
 
-Write-Host "[watch] 监听 $reqFile  (每 15s 检查一次, Ctrl+C 退出)" -ForegroundColor Cyan
-Write-Status "idle" "等待请求"
+Write-Host "[watch] watching $reqFile  (every 15s, Ctrl+C to stop)" -ForegroundColor Cyan
+Write-Status "idle" "waiting"
 Set-Location $proj
 
 while ($true) {
   if (Test-Path $reqFile) {
     $retrain = $false
     try { $retrain = [bool]((Get-Content $reqFile -Raw | ConvertFrom-Json).retrain) } catch {}
-    $tag = if ($retrain) { "(含重训)" } else { "" }
-    Write-Host "[watch] 收到请求 retrain=$retrain, 开始预测 $tag" -ForegroundColor Yellow
-    Write-Status "running" ("PC 预测中 $tag")
+    Write-Host "[watch] request received (retrain=$retrain), predicting..." -ForegroundColor Yellow
+    Write-Status "running" "predicting"
     try {
       if ($retrain) { python scripts\predict_qlib.py --train } else { python scripts\predict_qlib.py }
       if ($LASTEXITCODE -eq 0) {
-        Write-Status "done" "完成"
-        Write-Host "[watch] 完成" -ForegroundColor Green
+        Write-Status "done" "done"; Write-Host "[watch] done" -ForegroundColor Green
       } else {
-        Write-Status "error" "预测脚本退出码 $LASTEXITCODE"
-        Write-Host "[watch] 失败 退出码 $LASTEXITCODE" -ForegroundColor Red
+        Write-Status "error" "exit $LASTEXITCODE"; Write-Host "[watch] failed (exit $LASTEXITCODE)" -ForegroundColor Red
       }
     } catch {
       Write-Status "error" $_.Exception.Message

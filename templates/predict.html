@@ -86,14 +86,18 @@ async function loadPrediction() {
     const busy = job.running || j.pc_pending || (pcs && pcs.state === "running");
     if (busy) {
       const txt = job.running ? job.status
-                : (pcs && pcs.state === "running" ? pcs.msg : "已提交, 等待 PC 开始...");
+                : (pcs && pcs.state === "running" ? "PC 预测中..." : "已提交, 等待 PC 开始...");
       $jobStat.innerHTML = `<span class="warn">⏳ ${txt}</span>`;
       $btnPredict.disabled = $btnRetrain.disabled = true;
       if (!pollTimer) pollTimer = setInterval(loadPrediction, 5000);
     } else {
       $btnPredict.disabled = $btnRetrain.disabled = false;
       if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-      const s = (pcs && pcs.msg) ? `PC: ${pcs.state} · ${pcs.msg}` : (job.status || "");
+      let s = job.status || "";
+      if (pcs) {
+        const m = { idle: "PC 空闲, 可点按钮", done: "上次预测已完成", error: "PC 出错: " + (pcs.msg || "") };
+        s = m[pcs.state] || s;
+      }
       if (s) $jobStat.textContent = s;
     }
     if (j.hits && j.generated_at !== lastGen) {

@@ -1,35 +1,40 @@
-# 在 PC 上跑 qlib 下一交易日预测 (方案B)。
-# 结果 predictions.json 写到与 NAS 共享的 Z 盘 csv_tmp 目录, NAS 容器直接读取展示。
-# 预测只读取 bin 数据, 不需要 tushare token (数据由 NAS 每晚更新)。
+# Run the qlib next-day prediction on the PC (Plan B).
+# Writes predictions.json to the NAS-shared folder; the NAS container reads & displays it.
+# Prediction only reads bin data (no tushare token needed; the NAS updates data nightly).
+# Uses a UNC path (does NOT depend on the Z: drive mapping).
 #
-# 用法:
-#   powershell -ExecutionPolicy Bypass -File scripts\run_predict_pc.ps1           # 用已存模型预测(日常)
-#   powershell -ExecutionPolicy Bypass -File scripts\run_predict_pc.ps1 -Train    # 重训+预测(每周一次)
+# Usage:
+#   powershell -ExecutionPolicy Bypass -File scripts\run_predict_pc.ps1           # predict (daily)
+#   powershell -ExecutionPolicy Bypass -File scripts\run_predict_pc.ps1 -Train    # retrain + predict (weekly)
 param([switch]$Train)
 
 $ErrorActionPreference = "Stop"
 $proj = Split-Path -Parent $PSScriptRoot
 
-$env:QLIB_DATA_PATH      = "Z:\claude\qlib\data\cn_data"
-$env:PARQUET_DIR         = "Z:\claude\qlib\data\csv_tmp\tushare_daily"
-$env:PREDICT_DATA_DIR    = "Z:\claude\qlib\data\csv_tmp"            # 与 NAS 共享, 写 predictions.json/模型
-$env:STOCK_META_DB       = Join-Path $proj "data\stock_meta.db"    # PC 本地股票元数据
+$shared = $env:SHARED_DIR
+if (-not $shared) { $shared = "\\192.168.0.106\docker\obsidian\vaults\claude\qlib\data\csv_tmp" }
+$qlibData = (Split-Path $shared -Parent) + "\cn_data"
+
+$env:QLIB_DATA_PATH      = $qlibData
+$env:PARQUET_DIR         = Join-Path $shared "tushare_daily"
+$env:PREDICT_DATA_DIR    = $shared
+$env:STOCK_META_DB       = Join-Path $proj "data\stock_meta.db"
 $env:QLIB_KERNELS        = "8"
 $env:PREDICT_TRAIN_START = "2020-01-01"
 
 if (-not (Test-Path $env:STOCK_META_DB)) {
-  Write-Host "缺少 stock_meta.db, 先在 PC 上构建一次 (需要 token + pypinyin):" -ForegroundColor Yellow
+  Write-Host "missing stock_meta.db, build it once on the PC (needs token + pypinyin):" -ForegroundColor Yellow
   Write-Host "  pip install pypinyin"
-  Write-Host "  `$env:TUSHARE_TOKEN='你的token'; `$env:STOCK_META_DB='$($env:STOCK_META_DB)'; python scripts\build_stock_meta.py --force"
+  Write-Host "  `$env:TUSHARE_TOKEN='<your token>'; `$env:STOCK_META_DB='$($env:STOCK_META_DB)'; python scripts\build_stock_meta.py --force"
   exit 1
 }
 
 Set-Location $proj
 if ($Train) {
-  Write-Host "[run_predict_pc] 重训 + 预测 ..." -ForegroundColor Cyan
+  Write-Host "[run_predict_pc] retrain + predict ..." -ForegroundColor Cyan
   python scripts\predict_qlib.py --train
 } else {
-  Write-Host "[run_predict_pc] 预测 (用已存模型) ..." -ForegroundColor Cyan
+  Write-Host "[run_predict_pc] predict (saved model) ..." -ForegroundColor Cyan
   python scripts\predict_qlib.py
 }
-Write-Host "[run_predict_pc] 完成, predictions.json 已写入 $($env:PREDICT_DATA_DIR)" -ForegroundColor Green
+Write-Host "[run_predict_pc] done -> $($env:PREDICT_DATA_DIR)\predictions.json" -ForegroundColor Green
