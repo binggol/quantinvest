@@ -82,13 +82,21 @@ while ($true) {
 
   if (Test-Path $rdReqFile) {
     Write-Host "[watch] RD-Agent request: update data + analyze factors + predict (slow ~20-40min)..." -ForegroundColor Yellow
-    Write-RdStatus "running" "updating data + RD-Agent analysis + predict"
-    $bash = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent && " +
-            "rsync -a --delete --exclude csi300.txt --exclude csi300.txt.bak /mnt/z/claude/qlib/data/cn_data/ /mnt/c/qlib_data/cn_data/ && " +
-            "cd /mnt/c/rdagent && python predict_next_day.py && python post_process.py && python export_rdagent.py"
-    wsl -e bash -lc $bash
-    if ($LASTEXITCODE -eq 0) { Write-RdStatus "done" "done"; Write-Host "[watch] RD-Agent done" -ForegroundColor Green }
-    else { Write-RdStatus "error" "exit $LASTEXITCODE"; Write-Host "[watch] RD-Agent failed (exit $LASTEXITCODE)" -ForegroundColor Red }
+    Write-RdStatus "running" "sync data (robocopy Z->C)"
+    # 1) Windows robocopy 同步 Z->C (快; WSL rsync 走 /mnt/z 网络盘太慢). 源用 UNC, 不依赖盘符。
+    robocopy "$qlibData" "C:\qlib_data\cn_data" /MIR /MT:8 /R:1 /W:2 /XF csi300.txt csi300.txt.bak /NFL /NDL /NJH /NP | Out-Null
+    if ($LASTEXITCODE -ge 8) {
+      Write-RdStatus "error" "robocopy failed $LASTEXITCODE"
+      Write-Host "[watch] RD-Agent robocopy failed $LASTEXITCODE" -ForegroundColor Red
+    } else {
+      # 2) WSL(miniconda rdagent env): predict + post_process + export
+      Write-RdStatus "running" "RD-Agent analysis + predict (retrain)"
+      $bash = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent && " +
+              "cd /mnt/c/rdagent && python predict_next_day.py && python post_process.py && python export_rdagent.py"
+      wsl -e bash -lc $bash
+      if ($LASTEXITCODE -eq 0) { Write-RdStatus "done" "done"; Write-Host "[watch] RD-Agent done" -ForegroundColor Green }
+      else { Write-RdStatus "error" "exit $LASTEXITCODE"; Write-Host "[watch] RD-Agent failed (exit $LASTEXITCODE)" -ForegroundColor Red }
+    }
     Remove-Item $rdReqFile -Force -ErrorAction SilentlyContinue
   }
   Start-Sleep -Seconds 15
