@@ -36,6 +36,8 @@ PREDICT_COMPUTE_HERE = (os.environ.get("PREDICT_COMPUTE_HERE", "0") == "1")
 # 方案B: 网页按钮写请求文件到共享目录, PC 监听脚本执行并回写状态
 PREDICT_REQUEST = PREDICT_JSON.parent / "predict_request.json"
 PREDICT_STATUS = PREDICT_JSON.parent / "predict_status.json"
+# RD-Agent 产出 (有效因子 + 买入清单), 由 PC 的 export_rdagent.py 写到共享目录
+RDAGENT_JSON = PREDICT_JSON.parent / "rdagent.json"
 TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN", "")
 DAILY_HOUR = int(os.environ.get("DAILY_UPDATE_HOUR", "21"))
 DAILY_MINUTE = int(os.environ.get("DAILY_UPDATE_MINUTE", "0"))
@@ -1038,6 +1040,24 @@ def api_predict_run():
     retrain = (request.args.get("retrain", "0") == "1")
     threading.Thread(target=_run_predict_job, args=(retrain,), daemon=True).start()
     return jsonify({"ok": True, "message": "已启动: 更新数据并预测" + ("(含重训)" if retrain else "")})
+
+
+# ============================================================
+#  /api/rdagent  RD-Agent 有效因子 + 买入清单 (展示 PC 产出)
+# ============================================================
+
+@app.route("/rdagent")
+def rdagent_page():
+    return render_template("rdagent.html")
+
+
+@app.route("/api/rdagent")
+def api_rdagent():
+    data = _read_json(RDAGENT_JSON)
+    if data is None:
+        return jsonify({"hits": [], "factors": [],
+                        "message": "尚无 RD-Agent 结果; 在 PC 上运行 scripts/export_rdagent.py 生成"})
+    return jsonify(data)
 
 
 @app.route("/api/health")
