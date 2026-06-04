@@ -1,4 +1,4 @@
-# PC resident watcher (Plan B + web button).
+﻿# PC resident watcher (Plan B + web button).
 # Watches the shared folder for predict_request.json (written by the NAS web button),
 # runs the prediction, writes predict_status.json, deletes the request.
 # Uses a UNC path so it does NOT depend on the Z: drive mapping (works in any shell,
@@ -81,14 +81,72 @@ while ($true) {
   }
 
   if (Test-Path $rdReqFile) {
-    # request flags: retrain ($true=full retrain, $false=reuse cached); batch=因子批次标签(空=默认)
+    # request flags: mine(因子挖掘) / retrain / batch(因子批次标签) / loop_n(挖掘轮数)
     $rdRetrain = $false   # web 默认快速预测(复用缓存); 缓存不存在时 predict_next_day 自动回退重训
-    $rdBatch = ""
+    $rdBatch = ""; $rdMine = $false; $rdLoopN = 5
     try {
       $rr = (Get-Content $rdReqFile -Raw | ConvertFrom-Json)
       if ($null -ne $rr.retrain) { $rdRetrain = [bool]$rr.retrain }
       if ($null -ne $rr.batch)   { $rdBatch = [string]$rr.batch }
+      if ($null -ne $rr.mine)    { $rdMine = [bool]$rr.mine }
+      if ($null -ne $rr.loop_n)  { $rdLoopN = [int]$rr.loop_n }
     } catch {}
+
+    # ===== 因子挖掘 (RD-Agent fin_factor 演化循环, 几小时, 烧 LLM). 产出新批次但不动全局 SOTA 指针 =====
+    if ($rdMine) {
+      Write-Host "[watch] RD-Agent MINE (loop_n=$rdLoopN): 因子发现 (~几小时)..." -ForegroundColor Magenta
+      docker ps 2>&1 | Out-Null
+      if ($LASTEXITCODE -ne 0) {
+        Write-RdStatus "error" "Docker 未运行, 无法挖掘 (请先启动 Docker Desktop 再试)"
+        Write-Host "[watch] mine aborted: Docker 未运行" -ForegroundColor Red
+        Remove-Item $rdReqFile -Force -ErrorAction SilentlyContinue
+        continue
+      }
+      Write-RdStatus "running" "mine: 同步数据 (robocopy Z->C)"
+      robocopy "$qlibData" "C:\qlib_data\cn_data" /MIR /MT:8 /R:1 /W:2 /XF csi300.txt csi300.txt.bak /NFL /NDL /NJH /NP | Out-Null
+      if (-not $env:TUSHARE_TOKEN -and (Test-Path "$proj\data\.tushare_token")) { $env:TUSHARE_TOKEN = (Get-Content "$proj\data\.tushare_token" -Raw).Trim() }
+      Write-RdStatus "running" "mine: 重建 csi300 universe"
+      Push-Location "C:\rdagent"; python build_csi300.py; Pop-Location
+      # fin_factor (Windows anaconda); 日志写到已知目录以便解析 SOTA
+      $logPath = "C:\rdagent\log\mine_$(Get-Date -Format yyyyMMdd_HHmmss)"
+      $env:LOG_TRACE_PATH = $logPath
+      $mineLog = "C:\rdagent\daily_logs\mine_$(Get-Date -Format yyyyMMdd_HHmmss).log"
+      if (-not (Test-Path "C:\rdagent\daily_logs")) { New-Item -ItemType Directory -Force "C:\rdagent\daily_logs" | Out-Null }
+      Write-RdStatus "running" "mine: rdagent fin_factor loop_n=$rdLoopN (~几小时)"
+      Push-Location "C:\rdagent"
+      & "D:\anaconda3\Scripts\rdagent.exe" fin_factor --loop_n $rdLoopN 2>&1 | Out-File -FilePath $mineLog -Encoding utf8
+      $mineExit = $LASTEXITCODE
+      Pop-Location
+      Remove-Item Env:\LOG_TRACE_PATH -ErrorAction SilentlyContinue
+      if ($mineExit -ne 0) {
+        Write-RdStatus "error" "fin_factor exit $mineExit (日志 $mineLog)"
+        Remove-Item $rdReqFile -Force -ErrorAction SilentlyContinue
+        continue
+      }
+      # 解析本次产出的新 SOTA workspace
+      Write-RdStatus "running" "mine: 解析新 SOTA workspace"
+      $newWs = (& python "C:\rdagent\resolve_sota_ws.py" $logPath | Select-Object -Last 1)
+      if (-not $newWs) {
+        Write-RdStatus "error" "无法解析新 SOTA workspace (见 $logPath)"
+        Remove-Item $rdReqFile -Force -ErrorAction SilentlyContinue
+        continue
+      }
+      Write-Host "[watch] mine: 新 SOTA workspace = $newWs" -ForegroundColor Green
+      # 在新 workspace 上评估因子 -> 归档成新批次 (RDAGENT_SOTA_WS_OVERRIDE 不改全局指针/canonical)
+      Write-RdStatus "running" "mine: factor_analysis on 新 workspace"
+      wsl -e bash -lc "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent && cd /mnt/c/rdagent && RDAGENT_SOTA_WS_OVERRIDE='$newWs' python factor_analysis.py"
+      $faExit = $LASTEXITCODE
+      Push-Location "C:\rdagent"; python export_rdagent.py; Pop-Location   # 刷新批次索引给网页下拉
+      if ($faExit -eq 0) {
+        Write-RdStatus "done" "mine 完成: 新批次已生成, 去网页下拉选它预测对比"
+        Write-Host "[watch] mine done" -ForegroundColor Green
+      } else {
+        Write-RdStatus "error" "factor_analysis exit $faExit"
+      }
+      Remove-Item $rdReqFile -Force -ErrorAction SilentlyContinue
+      continue
+    }
+
     $rdMode = if ($rdRetrain) { "1" } else { "0" }
     Write-Host "[watch] RD-Agent request (retrain=$rdRetrain batch='$rdBatch'): sync data + predict..." -ForegroundColor Yellow
     Write-RdStatus "running" "sync data (robocopy Z->C)"

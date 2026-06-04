@@ -1104,6 +1104,27 @@ def api_rdagent_request():
     return jsonify({"ok": True, "message": f"已通知 PC: 更新数据 + 复用模型预测{bmsg} (首次该批次会自动重训一次)"})
 
 
+@app.route("/api/rdagent/mine")
+def api_rdagent_mine():
+    """网页按钮触发: RD-Agent 因子挖掘 (fin_factor 演化循环, 几小时, 烧 LLM).
+    产出一个新的因子批次, 不改变默认 SOTA. loop_n=挖掘轮数 (默认 5). 需 PC 上 Docker 已启动."""
+    if RDAGENT_REQUEST.exists():
+        return jsonify({"ok": False, "message": "已有 RD-Agent 任务在排队/处理中"})
+    try:
+        loop_n = int(request.args.get("loop_n", "5"))
+    except ValueError:
+        loop_n = 5
+    loop_n = max(1, min(loop_n, 50))
+    try:
+        RDAGENT_REQUEST.parent.mkdir(parents=True, exist_ok=True)
+        RDAGENT_REQUEST.write_text(json.dumps(
+            {"requested_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "mine": True, "loop_n": loop_n},
+            ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"写请求失败: {e}"})
+    return jsonify({"ok": True, "message": f"已通知 PC: RD-Agent 因子挖掘 loop_n={loop_n} (很慢, 约几小时; 需 PC 上 Docker 已启动)"})
+
+
 @app.route("/api/health")
 def health():
     return jsonify({

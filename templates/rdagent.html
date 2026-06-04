@@ -36,6 +36,12 @@
         <select id="batch-sel" style="width:100%;margin-top:3px;"></select>
       </label>
       <button id="btn-fast" style="margin-top:8px;">⚡ 快速预测 (用所选批次)</button>
+      <div style="margin-top:10px;border-top:1px solid #334155;padding-top:8px;">
+        <label style="color:#cbd5e1;font-size:12px;">挖掘轮数:
+          <input id="mine-loops" type="number" min="1" max="50" value="5" style="width:54px;"/>
+        </label>
+        <button id="btn-mine" style="margin-top:6px;width:100%;">🔬 重新挖掘因子 (慢·需Docker)</button>
+      </div>
       <div id="rd-stat" class="hit-stat"></div>
       <div style="color:#cbd5e1;font-size:12px;margin-top:6px;">有效因子 (<span id="nf">0</span>):</div>
       <div class="factor-chips" id="factor-chips"></div>
@@ -83,13 +89,28 @@ if (window.ResizeObserver) new ResizeObserver(() => chart.resize()).observe(docu
 
 let results = [], selectedIdx = -1, pollTimer = null, lastGen = "";
 const $btnFast = document.getElementById("btn-fast");
+const $btnMine = document.getElementById("btn-mine");
+const $mineLoops = document.getElementById("mine-loops");
 const $batchSel = document.getElementById("batch-sel");
 const $rdStat = document.getElementById("rd-stat");
 let batchData = { batches: [], default_factors: [], default_n: 0 };
-function setBtns(disabled) { $btnFast.disabled = disabled; }
+function setBtns(disabled) { $btnFast.disabled = disabled; $btnMine.disabled = disabled; }
 $miniAdjust.addEventListener("change", () => { if (selectedIdx >= 0) loadMiniKline(results[selectedIdx]); });
 $btnFast.addEventListener("click", () => runRefresh(false));
+$btnMine.addEventListener("click", runMine);
 $batchSel.addEventListener("change", showBatchFactors);
+
+async function runMine() {
+  const n = parseInt($mineLoops.value) || 5;
+  if (!confirm(`确定开始 RD-Agent 因子挖掘？\n轮数 loop_n=${n}，预计几小时、消耗 LLM 费用，且需要 PC 上 Docker 已启动。\n挖掘会生成一个新因子批次（不改变当前默认）。`)) return;
+  setBtns(true);
+  $rdStat.textContent = "启动挖掘中...";
+  try {
+    const j = await (await fetch("/api/rdagent/mine?loop_n=" + n)).json();
+    $rdStat.textContent = j.message || "";
+    setTimeout(load, 1500);
+  } catch (e) { $rdStat.innerHTML = `<span class="warn">⚠️ ${e.message}</span>`; setBtns(false); }
+}
 
 async function loadBatches() {
   try { batchData = await (await fetch("/api/rdagent/batches")).json(); }
@@ -124,7 +145,7 @@ async function load() {
     const st = j.rd_status || null;
     const busy = j.rd_pending || (st && st.state === "running");
     if (busy) {
-      $rdStat.innerHTML = `<span class="warn">⏳ ${st && st.state === "running" ? "PC 跑 RD-Agent 中(更新+分析+预测,约20-40分钟)" : "已提交, 等待 PC 开始..."}</span>`;
+      $rdStat.innerHTML = `<span class="warn">⏳ ${st && st.state === "running" ? ("PC 处理中: " + (st.msg || "RD-Agent")) : "已提交, 等待 PC 开始..."}</span>`;
       setBtns(true);
       if (!pollTimer) pollTimer = setInterval(load, 8000);
     } else {
