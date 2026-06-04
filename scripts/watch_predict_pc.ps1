@@ -89,13 +89,26 @@ while ($true) {
       Write-RdStatus "error" "robocopy failed $LASTEXITCODE"
       Write-Host "[watch] RD-Agent robocopy failed $LASTEXITCODE" -ForegroundColor Red
     } else {
-      # 2) WSL(miniconda rdagent env): predict + post_process + export
-      Write-RdStatus "running" "RD-Agent analysis + predict (retrain)"
-      $bash = "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent && " +
-              "cd /mnt/c/rdagent && python predict_next_day.py && python post_process.py && python export_rdagent.py"
-      wsl -e bash -lc $bash
-      if ($LASTEXITCODE -eq 0) { Write-RdStatus "done" "done"; Write-Host "[watch] RD-Agent done" -ForegroundColor Green }
-      else { Write-RdStatus "error" "exit $LASTEXITCODE"; Write-Host "[watch] RD-Agent failed (exit $LASTEXITCODE)" -ForegroundColor Red }
+      # 2) predict_next_day 在 WSL(miniconda rdagent env, 有 qlib) 跑, 用 /mnt 路径
+      Write-RdStatus "running" "predict (WSL retrain ~15min)"
+      wsl -e bash -lc "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent && cd /mnt/c/rdagent && python predict_next_day.py"
+      if ($LASTEXITCODE -ne 0) {
+        Write-RdStatus "error" "predict_next_day exit $LASTEXITCODE"
+        Write-Host "[watch] RD-Agent predict failed $LASTEXITCODE" -ForegroundColor Red
+      } else {
+        # 3) post_process + export 在 Windows python 跑 (用 C:/ 路径 + tushare)
+        Write-RdStatus "running" "post-process + export (Windows)"
+        if (-not $env:TUSHARE_TOKEN -and (Test-Path "$proj\data\.tushare_token")) {
+          $env:TUSHARE_TOKEN = (Get-Content "$proj\data\.tushare_token" -Raw).Trim()
+        }
+        Push-Location "C:\rdagent"
+        python post_process.py
+        $pp = $LASTEXITCODE
+        python export_rdagent.py
+        Pop-Location
+        if ($pp -eq 0) { Write-RdStatus "done" "done"; Write-Host "[watch] RD-Agent done" -ForegroundColor Green }
+        else { Write-RdStatus "error" "post_process exit $pp"; Write-Host "[watch] RD-Agent post_process failed $pp" -ForegroundColor Red }
+      }
     }
     Remove-Item $rdReqFile -Force -ErrorAction SilentlyContinue
   }
