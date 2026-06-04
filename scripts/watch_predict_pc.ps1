@@ -48,12 +48,21 @@ Set-Location $proj
 
 while ($true) {
   if (Test-Path $reqFile) {
-    $retrain = $false
-    try { $retrain = [bool]((Get-Content $reqFile -Raw | ConvertFrom-Json).retrain) } catch {}
-    Write-Host "[watch] request received (retrain=$retrain), predicting..." -ForegroundColor Yellow
+    $retrain = $false; $update = $false
+    try { $r = (Get-Content $reqFile -Raw | ConvertFrom-Json); $retrain = [bool]$r.retrain; $update = [bool]$r.update } catch {}
+    $pargs = @()
+    if ($update) {
+      if (-not $env:TUSHARE_TOKEN -and (Test-Path "$proj\data\.tushare_token")) {
+        $env:TUSHARE_TOKEN = (Get-Content "$proj\data\.tushare_token" -Raw).Trim()
+      }
+      if ($env:TUSHARE_TOKEN) { $pargs += "--update" }
+      else { Write-Host "[watch] update requested but no TUSHARE_TOKEN (data\.tushare_token), skipping update" -ForegroundColor Yellow }
+    }
+    if ($retrain) { $pargs += "--train" }
+    Write-Host "[watch] request (update=$update retrain=$retrain), running: predict_qlib.py $pargs" -ForegroundColor Yellow
     Write-Status "running" "predicting"
     try {
-      if ($retrain) { python scripts\predict_qlib.py --train } else { python scripts\predict_qlib.py }
+      python scripts\predict_qlib.py @pargs
       if ($LASTEXITCODE -eq 0) {
         Write-Status "done" "done"; Write-Host "[watch] done" -ForegroundColor Green
       } else {

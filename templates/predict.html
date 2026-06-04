@@ -24,8 +24,9 @@
     <div class="screen-criteria">
       <h3>🧠 预测</h3>
       <div class="c-row" id="pred-info">加载中...</div>
-      <button id="btn-predict">🔄 让 PC 重新预测</button>
-      <button id="btn-retrain" style="background:#7c2d12;margin-top:6px;">🧠 让 PC 重训 + 预测 (慢)</button>
+      <button id="btn-update">🔃 更新数据 + 预测 (最新, 慢)</button>
+      <button id="btn-predict" style="margin-top:6px;">🔄 直接预测 (用现有数据, 快)</button>
+      <button id="btn-retrain" style="background:#7c2d12;margin-top:6px;">🧠 重训模型 + 预测 (慢)</button>
       <div id="job-stat" class="hit-stat"></div>
       <div class="c-row" style="color:#64748b;font-size:11px;margin-top:8px;">
         标签 = 下一交易日收益; 模型每周日 03:00 自动重训, 每日 21:00 数据更新后自动预测。
@@ -64,6 +65,7 @@ const $miniHeader = document.getElementById("kline-mini-header");
 const $miniAdjust = document.getElementById("mini-adjust");
 const $btnPredict = document.getElementById("btn-predict");
 const $btnRetrain = document.getElementById("btn-retrain");
+const $btnUpdate = document.getElementById("btn-update");
 const chart = echarts.init(document.getElementById("chart-mini"));
 window.addEventListener("resize", () => chart.resize());
 if (window.ResizeObserver) new ResizeObserver(() => chart.resize()).observe(document.getElementById("chart-mini"));
@@ -73,8 +75,9 @@ let results = [], selectedIdx = -1, pollTimer = null, lastGen = "";
 $miniAdjust.addEventListener("change", () => {
   if (selectedIdx >= 0 && results[selectedIdx]) loadMiniKline(results[selectedIdx]);
 });
-$btnPredict.addEventListener("click", () => runPredict(false));
-$btnRetrain.addEventListener("click", () => runPredict(true));
+$btnPredict.addEventListener("click", () => runPredict(false, false));
+$btnUpdate.addEventListener("click", () => runPredict(false, true));
+$btnRetrain.addEventListener("click", () => runPredict(true, false));
 
 async function loadPrediction() {
   try {
@@ -88,10 +91,10 @@ async function loadPrediction() {
       const txt = job.running ? job.status
                 : (pcs && pcs.state === "running" ? "PC 预测中..." : "已提交, 等待 PC 开始...");
       $jobStat.innerHTML = `<span class="warn">⏳ ${txt}</span>`;
-      $btnPredict.disabled = $btnRetrain.disabled = true;
+      $btnPredict.disabled = $btnRetrain.disabled = $btnUpdate.disabled = true;
       if (!pollTimer) pollTimer = setInterval(loadPrediction, 5000);
     } else {
-      $btnPredict.disabled = $btnRetrain.disabled = false;
+      $btnPredict.disabled = $btnRetrain.disabled = $btnUpdate.disabled = false;
       if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
       let s = job.status || "";
       if (pcs) {
@@ -115,21 +118,22 @@ async function loadPrediction() {
 
 function renderInfo(j) {
   if (!j.as_of) { $info.textContent = "尚无预测结果"; return; }
-  $info.innerHTML = `基于 <b>${j.as_of}</b> 数据 · 预测下一交易日<br>` +
+  const note = j.data_note ? `<br><span style="color:#fbbf24">${j.data_note}</span>` : "";
+  $info.innerHTML = `基于 <b>${j.as_of}</b> 数据 · 预测下一交易日${note}<br>` +
     `因子 ${j.n_factors} 个 · 生成于 ${j.generated_at || "?"}`;
 }
 
-async function runPredict(retrain) {
-  $btnPredict.disabled = $btnRetrain.disabled = true;
+async function runPredict(retrain, update) {
+  $btnPredict.disabled = $btnRetrain.disabled = $btnUpdate.disabled = true;
   $jobStat.textContent = "启动中...";
   try {
-    const r = await fetch("/api/predict/request?retrain=" + (retrain ? "1" : "0"));
+    const r = await fetch(`/api/predict/request?retrain=${retrain ? 1 : 0}&update=${update ? 1 : 0}`);
     const j = await r.json();
     $jobStat.textContent = j.message || "";
     setTimeout(loadPrediction, 1500);
   } catch (e) {
     $jobStat.innerHTML = `<span class="warn">⚠️ ${e.message}</span>`;
-    $btnPredict.disabled = $btnRetrain.disabled = false;
+    $btnPredict.disabled = $btnRetrain.disabled = $btnUpdate.disabled = false;
   }
 }
 

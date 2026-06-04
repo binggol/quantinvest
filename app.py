@@ -995,6 +995,7 @@ def api_predict():
 def api_predict_request():
     """网页按钮触发预测. 本机计算模式直接本地跑; 否则写请求文件交 PC 监听脚本执行."""
     retrain = (request.args.get("retrain", "0") == "1")
+    update = (request.args.get("update", "0") == "1")   # 先拉 tushare 最新数据再预测
     if PREDICT_COMPUTE_HERE:
         return api_predict_run()
     if PREDICT_REQUEST.exists():
@@ -1002,11 +1003,13 @@ def api_predict_request():
     try:
         PREDICT_REQUEST.parent.mkdir(parents=True, exist_ok=True)
         PREDICT_REQUEST.write_text(json.dumps(
-            {"requested_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "retrain": retrain},
+            {"requested_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+             "retrain": retrain, "update": update},
             ensure_ascii=False), encoding="utf-8")
     except Exception as e:
         return jsonify({"ok": False, "message": f"写请求失败: {e}"})
-    return jsonify({"ok": True, "message": "已通知 PC 开始预测" + ("(含重训)" if retrain else "")})
+    tag = ("(更新数据+" if update else "(") + ("重训+" if retrain else "") + "预测)"
+    return jsonify({"ok": True, "message": "已通知 PC: " + tag})
 
 
 def _run_predict_job(retrain: bool):

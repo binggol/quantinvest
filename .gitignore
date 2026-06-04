@@ -9,6 +9,7 @@ data/*.db-*
 data/qlib_model.pkl
 data/predictions.json
 data/factors.json
+data/.tushare_token
 *.log
 mlruns/
 _tmp*/

@@ -210,9 +210,13 @@ def predict_and_save(model=None, ds=None, latest=None):
         "close": None if pd.isna(r.close) else round(float(r.close), 2),
     } for i, r in df.iterrows()]
 
+    today = datetime.now().strftime("%Y-%m-%d")
+    data_note = ("数据已更新至今日 (收盘)" if latest >= today
+                 else f"数据截至 {latest} (今日盘中/数据未发布/非交易日)")
     out = {
         "as_of": latest,                 # 基于哪一天的数据预测
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "data_note": data_note,
         "label": "next_day_return",
         "topn": TOPN,
         "n_factors": len(_load_factors()[0]),
