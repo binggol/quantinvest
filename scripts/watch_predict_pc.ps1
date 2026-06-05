@@ -118,16 +118,16 @@ while ($true) {
       $mineExit = $LASTEXITCODE
       Pop-Location
       Remove-Item Env:\LOG_TRACE_PATH -ErrorAction SilentlyContinue
+      # fin_factor 即使非零退出(常见: LLM 限流耗尽重试), 已完成的 loop 仍有成果在 trace 里,
+      # 所以不直接放弃, 尝试从 session 抢救最优 SOTA。
       if ($mineExit -ne 0) {
-        Write-RdStatus "error" "fin_factor exit $mineExit (日志 $mineLog)"
-        Remove-Item $rdReqFile -Force -ErrorAction SilentlyContinue
-        continue
+        Write-Host "[watch] mine: fin_factor exit $mineExit — 尝试从已完成的 loop 抢救 SOTA" -ForegroundColor Yellow
+        Write-RdStatus "running" "mine: fin_factor exit $mineExit, 尝试抢救已完成 loop 的成果"
       }
-      # 解析本次产出的新 SOTA workspace
       Write-RdStatus "running" "mine: 解析新 SOTA workspace"
       $newWs = (& python "C:\rdagent\resolve_sota_ws.py" $logPath | Select-Object -Last 1)
       if (-not $newWs) {
-        Write-RdStatus "error" "无法解析新 SOTA workspace (见 $logPath)"
+        Write-RdStatus "error" "无法解析 SOTA (fin_factor exit $mineExit, 日志 $mineLog)"
         Remove-Item $rdReqFile -Force -ErrorAction SilentlyContinue
         continue
       }
@@ -138,8 +138,10 @@ while ($true) {
       $faExit = $LASTEXITCODE
       Push-Location "C:\rdagent"; python export_rdagent.py; Pop-Location   # 刷新批次索引给网页下拉
       if ($faExit -eq 0) {
-        Write-RdStatus "done" "mine 完成: 新批次已生成, 去网页下拉选它预测对比"
-        Write-Host "[watch] mine done" -ForegroundColor Green
+        $doneMsg = if ($mineExit -eq 0) { "mine 完成: 新批次已生成, 去网页下拉选它预测对比" } `
+                   else { "mine 部分完成(fin_factor exit $mineExit, 已从完成的 loop 抢救): 新批次已生成" }
+        Write-RdStatus "done" $doneMsg
+        Write-Host "[watch] mine done (exit=$mineExit)" -ForegroundColor Green
       } else {
         Write-RdStatus "error" "factor_analysis exit $faExit"
       }
