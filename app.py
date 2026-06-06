@@ -41,6 +41,7 @@ RDAGENT_JSON = PREDICT_JSON.parent / "rdagent.json"
 RDAGENT_REQUEST = PREDICT_JSON.parent / "rdagent_request.json"   # 网页按钮触发
 RDAGENT_STATUS = PREDICT_JSON.parent / "rdagent_status.json"     # PC 监听回写
 RDAGENT_BATCHES = PREDICT_JSON.parent / "rdagent_batches.json"   # 可选的有效因子批次索引 (PC 端导出)
+RDAGENT_MODEL_RESULTS = PREDICT_JSON.parent / "model_results.json"  # 模型实验室回测结果 (PC 端写)
 TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN", "")
 DAILY_HOUR = int(os.environ.get("DAILY_UPDATE_HOUR", "21"))
 DAILY_MINUTE = int(os.environ.get("DAILY_UPDATE_MINUTE", "0"))
@@ -1090,10 +1091,12 @@ def api_rdagent_request():
         return jsonify({"ok": False, "message": "已有 RD-Agent 任务在排队/处理中"})
     retrain = (request.args.get("retrain", "0").strip().lower() not in ("0", "false", "no", ""))
     batch = (request.args.get("batch", "") or "").strip()
+    model = (request.args.get("model", "") or "").strip().lower()
     try:
         RDAGENT_REQUEST.parent.mkdir(parents=True, exist_ok=True)
         RDAGENT_REQUEST.write_text(json.dumps(
-            {"requested_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "retrain": retrain, "batch": batch},
+            {"requested_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "retrain": retrain,
+             "batch": batch, "model": model},
             ensure_ascii=False),
             encoding="utf-8")
     except Exception as e:
@@ -1123,6 +1126,38 @@ def api_rdagent_mine():
     except Exception as e:
         return jsonify({"ok": False, "message": f"写请求失败: {e}"})
     return jsonify({"ok": True, "message": f"已通知 PC: RD-Agent 因子挖掘 loop_n={loop_n} (很慢, 约几小时; 需 PC 上 Docker 已启动)"})
+
+
+@app.route("/api/rdagent/model_results")
+def api_rdagent_model_results():
+    """模型实验室: 读取各模型在各批次上的回测结果 (PC 端 run_model.py 写)."""
+    data = _read_json(RDAGENT_MODEL_RESULTS)
+    if not data:
+        return jsonify({"results": []})
+    return jsonify(data)
+
+
+@app.route("/api/rdagent/model_eval")
+def api_rdagent_model_eval():
+    """网页按钮触发: 在指定批次上训练某模型 + 回测, 结果回写 model_results.json. PC 执行.
+    model=lgb|xgb|catboost|ols|ridge|lasso ; batch=因子批次标签 (空=默认)."""
+    if RDAGENT_REQUEST.exists():
+        return jsonify({"ok": False, "message": "已有 RD-Agent 任务在排队/处理中"})
+    model = (request.args.get("model", "lgb") or "lgb").strip().lower()
+    allowed = {"lgb", "xgb", "catboost", "ols", "ridge", "lasso"}
+    if model not in allowed:
+        return jsonify({"ok": False, "message": f"不支持的模型 {model}"})
+    batch = (request.args.get("batch", "") or "").strip()
+    try:
+        RDAGENT_REQUEST.parent.mkdir(parents=True, exist_ok=True)
+        RDAGENT_REQUEST.write_text(json.dumps(
+            {"requested_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+             "model_eval": True, "model": model, "batch": batch}, ensure_ascii=False),
+            encoding="utf-8")
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"写请求失败: {e}"})
+    bmsg = f" [批次 {batch}]" if batch else ""
+    return jsonify({"ok": True, "message": f"已通知 PC: 训练+回测 {model.upper()}{bmsg} (约几分钟)"})
 
 
 @app.route("/api/health")

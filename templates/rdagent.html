@@ -49,6 +49,19 @@
         <summary style="color:#94a3b8;font-size:12px;cursor:pointer;">📄 当日报告</summary>
         <div class="report-box" id="report"></div>
       </details>
+      <div style="margin-top:10px;border-top:1px solid #334155;padding-top:8px;">
+        <h3 style="margin:0 0 4px;">🧪 模型实验室</h3>
+        <div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">在所选批次上训练+回测各模型，结果对比</div>
+        <div id="model-btns" style="display:flex;flex-wrap:wrap;gap:4px;"></div>
+        <table id="model-table" style="width:100%;margin-top:8px;font-size:11px;border-collapse:collapse;">
+          <thead><tr style="color:#cbd5e1;text-align:right;">
+            <th style="text-align:left;">模型</th><th>RankIC</th><th>超额</th><th>IR</th><th>回撤</th><th></th></tr></thead>
+          <tbody id="model-tbody"></tbody>
+        </table>
+        <div style="margin-top:6px;">
+          <button id="btn-predict-sel" disabled style="width:100%;">📈 用选定模型预测下一交易日</button>
+        </div>
+      </div>
     </div>
     <div class="screen-results">
       <table id="result-table">
@@ -93,12 +106,70 @@ const $btnMine = document.getElementById("btn-mine");
 const $mineLoops = document.getElementById("mine-loops");
 const $batchSel = document.getElementById("batch-sel");
 const $rdStat = document.getElementById("rd-stat");
+const $modelBtns = document.getElementById("model-btns");
+const $modelTbody = document.getElementById("model-tbody");
+const $btnPredictSel = document.getElementById("btn-predict-sel");
+const MODEL_LIST = ["lgb","xgb","catboost","ols","ridge","lasso"];
+const MODEL_LABEL = {lgb:"LGB",xgb:"XGB",catboost:"CatBoost",ols:"OLS",ridge:"Ridge",lasso:"Lasso"};
 let batchData = { batches: [], default_factors: [], default_n: 0 };
-function setBtns(disabled) { $btnFast.disabled = disabled; $btnMine.disabled = disabled; }
+let modelResults = [], selectedModel = null;
+function setBtns(disabled) {
+  $btnFast.disabled = disabled; $btnMine.disabled = disabled;
+  $btnPredictSel.disabled = disabled || !selectedModel;
+  document.querySelectorAll('#model-btns button').forEach(b => b.disabled = disabled);
+}
 $miniAdjust.addEventListener("change", () => { if (selectedIdx >= 0) loadMiniKline(results[selectedIdx]); });
 $btnFast.addEventListener("click", () => runRefresh(false));
 $btnMine.addEventListener("click", runMine);
-$batchSel.addEventListener("change", showBatchFactors);
+$batchSel.addEventListener("change", () => { showBatchFactors(); selectedModel = null; $btnPredictSel.disabled = true; renderModelTable(); });
+
+// ---- 模型实验室 ----
+MODEL_LIST.forEach(mk => {
+  const b = document.createElement("button");
+  b.textContent = MODEL_LABEL[mk]; b.style.cssText = "font-size:11px;padding:2px 6px;";
+  b.addEventListener("click", () => runModelEval(mk));
+  $modelBtns.appendChild(b);
+});
+$btnPredictSel.addEventListener("click", () => { if (selectedModel) runRefresh(false, selectedModel); });
+
+async function runModelEval(mk) {
+  setBtns(true);
+  $rdStat.textContent = `启动 ${MODEL_LABEL[mk]} 训练+回测...`;
+  try {
+    const j = await (await fetch(`/api/rdagent/model_eval?model=${mk}&batch=${encodeURIComponent($batchSel.value)}`)).json();
+    $rdStat.textContent = j.message || "";
+    setTimeout(load, 1500);
+  } catch (e) { $rdStat.innerHTML = `<span class="warn">⚠️ ${e.message}</span>`; setBtns(false); }
+}
+async function loadModelResults() {
+  try { const j = await (await fetch("/api/rdagent/model_results")).json(); modelResults = j.results || []; }
+  catch (e) { modelResults = []; }
+  renderModelTable();
+}
+function renderModelTable() {
+  const b = $batchSel.value || "default";
+  const rows = modelResults.filter(r => r.batch === b).sort((a, c) => c.excess - a.excess);
+  const best = rows.length ? rows[0].model : null;
+  $modelTbody.innerHTML = "";
+  if (!rows.length) { $modelTbody.innerHTML = `<tr><td colspan="6" style="color:#64748b;">该批次暂无结果，点上面按钮跑一个模型</td></tr>`; return; }
+  rows.forEach(r => {
+    const tr = document.createElement("tr");
+    tr.style.cssText = "text-align:right;cursor:pointer;" + (r.model === selectedModel ? "background:#1e3a5f;" : "");
+    tr.innerHTML =
+      `<td style="text-align:left;">${MODEL_LABEL[r.model] || r.model}${r.model === best ? " ★" : ""}</td>` +
+      `<td>${r.rank_ic.toFixed(4)}</td>` +
+      `<td style="color:${r.excess >= 0 ? '#22c55e' : '#ef4444'}">${(r.excess * 100).toFixed(1)}%${r.n_seeds > 1 ? '*' : ''}</td>` +
+      `<td>${r.ir.toFixed(2)}</td>` +
+      `<td style="color:#f59e0b">${(r.maxdd * 100).toFixed(1)}%</td>` +
+      `<td>${r.model === best ? '✓' : ''}</td>`;
+    tr.title = r.n_seeds > 1 ? `${r.n_seeds}个种子均值, 区间[${(r.excess_lo*100).toFixed(1)},${(r.excess_hi*100).toFixed(1)}]%` : "确定性单次";
+    tr.addEventListener("click", () => {
+      selectedModel = r.model; renderModelTable();
+      $btnPredictSel.disabled = false; $btnPredictSel.textContent = `📈 用 ${MODEL_LABEL[r.model]} 预测下一交易日`;
+    });
+    $modelTbody.appendChild(tr);
+  });
+}
 
 async function runMine() {
   const n = parseInt($mineLoops.value) || 5;
@@ -128,11 +199,12 @@ function showBatchFactors() {
   $chips.innerHTML = factors.map(f => `<span>${f}</span>`).join("");
 }
 
-async function runRefresh(retrain) {
+async function runRefresh(retrain, model) {
   setBtns(true);
   $rdStat.textContent = "启动中...";
   try {
-    const url = `/api/rdagent/request?retrain=${retrain?1:0}&batch=${encodeURIComponent($batchSel.value)}`;
+    let url = `/api/rdagent/request?retrain=${retrain?1:0}&batch=${encodeURIComponent($batchSel.value)}`;
+    if (model) url += `&model=${encodeURIComponent(model)}`;
     const j = await (await fetch(url)).json();
     $rdStat.textContent = j.message || "";
     setTimeout(load, 1500);
@@ -150,7 +222,7 @@ async function load() {
       if (!pollTimer) pollTimer = setInterval(load, 8000);
     } else {
       setBtns(false);
-      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; loadModelResults(); }
       if (st) { const m = {idle:"",done:"上次已完成",error:"RD-Agent 出错: "+(st.msg||"")}; if (m[st.state]) $rdStat.textContent = m[st.state]; }
     }
     if (j.generated_at !== undefined && j.generated_at !== lastGen) lastGen = j.generated_at;
@@ -230,7 +302,7 @@ document.addEventListener("keydown",(e)=>{
   if(e.key==="ArrowDown"){e.preventDefault();selectRow(Math.min(results.length-1,selectedIdx+1));}
   else if(e.key==="ArrowUp"){e.preventDefault();selectRow(Math.max(0,selectedIdx-1));}
 });
-loadBatches().then(() => { showBatchFactors(); load(); });
+loadBatches().then(() => { showBatchFactors(); renderModelTable(); load(); loadModelResults(); });
 </script>
 </body>
 </html>

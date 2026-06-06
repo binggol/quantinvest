@@ -83,14 +83,29 @@ while ($true) {
   if (Test-Path $rdReqFile) {
     # request flags: mine(因子挖掘) / retrain / batch(因子批次标签) / loop_n(挖掘轮数)
     $rdRetrain = $false   # web 默认快速预测(复用缓存); 缓存不存在时 predict_next_day 自动回退重训
-    $rdBatch = ""; $rdMine = $false; $rdLoopN = 5
+    $rdBatch = ""; $rdMine = $false; $rdLoopN = 5; $rdModelEval = $false; $rdModel = "lgb"
     try {
       $rr = (Get-Content $rdReqFile -Raw | ConvertFrom-Json)
-      if ($null -ne $rr.retrain) { $rdRetrain = [bool]$rr.retrain }
-      if ($null -ne $rr.batch)   { $rdBatch = [string]$rr.batch }
-      if ($null -ne $rr.mine)    { $rdMine = [bool]$rr.mine }
-      if ($null -ne $rr.loop_n)  { $rdLoopN = [int]$rr.loop_n }
+      if ($null -ne $rr.retrain)    { $rdRetrain = [bool]$rr.retrain }
+      if ($null -ne $rr.batch)      { $rdBatch = [string]$rr.batch }
+      if ($null -ne $rr.mine)       { $rdMine = [bool]$rr.mine }
+      if ($null -ne $rr.loop_n)     { $rdLoopN = [int]$rr.loop_n }
+      if ($null -ne $rr.model_eval) { $rdModelEval = [bool]$rr.model_eval }
+      if ($null -ne $rr.model)      { $rdModel = [string]$rr.model }
     } catch {}
+
+    # ===== 模型实验室: 训练指定模型 + 回测, 结果写 model_results.json (供网页对比) =====
+    if ($rdModelEval) {
+      Write-Host "[watch] model eval: $rdModel on batch '$rdBatch'..." -ForegroundColor Cyan
+      Write-RdStatus "running" "model eval: $rdModel [batch=$rdBatch] 训练+回测中 (~几分钟)"
+      wsl -e bash -lc "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent && cd /mnt/c/rdagent && RDAGENT_MODEL='$rdModel' RDAGENT_FACTOR_BATCH='$rdBatch' python run_model.py"
+      $meExit = $LASTEXITCODE
+      if (Test-Path "C:\rdagent\model_results.json") { Copy-Item "C:\rdagent\model_results.json" (Join-Path $shared "model_results.json") -Force }
+      if ($meExit -eq 0) { Write-RdStatus "done" "model eval 完成: $rdModel [batch=$rdBatch]"; Write-Host "[watch] model eval done" -ForegroundColor Green }
+      else { Write-RdStatus "error" "model eval $rdModel 失败 exit $meExit" }
+      Remove-Item $rdReqFile -Force -ErrorAction SilentlyContinue
+      continue
+    }
 
     # ===== 因子挖掘 (RD-Agent fin_factor 演化循环, 几小时, 烧 LLM). 产出新批次但不动全局 SOTA 指针 =====
     if ($rdMine) {
@@ -168,8 +183,9 @@ while ($true) {
       #    RDAGENT_RETRAIN=1 全量重训(~15min); =0 复用缓存模型只预测(快)
       $stepMsg = if ($rdRetrain) { "predict (WSL full retrain)" } else { "predict (WSL no-retrain, cached model)" }
       if ($rdBatch) { $stepMsg += " [batch=$rdBatch]" }
+      if ($rdModel -and $rdModel -ne "lgb") { $stepMsg += " [model=$rdModel]" }
       Write-RdStatus "running" $stepMsg
-      wsl -e bash -lc "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent && cd /mnt/c/rdagent && RDAGENT_RETRAIN=$rdMode RDAGENT_FACTOR_BATCH='$rdBatch' python predict_next_day.py"
+      wsl -e bash -lc "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent && cd /mnt/c/rdagent && RDAGENT_RETRAIN=$rdMode RDAGENT_FACTOR_BATCH='$rdBatch' RDAGENT_MODEL='$rdModel' python predict_next_day.py"
       if ($LASTEXITCODE -ne 0) {
         Write-RdStatus "error" "predict_next_day exit $LASTEXITCODE"
         Write-Host "[watch] RD-Agent predict failed $LASTEXITCODE" -ForegroundColor Red
