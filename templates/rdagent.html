@@ -126,8 +126,8 @@ $batchSel.addEventListener("change", () => { showBatchFactors(); selectedModel =
 // ---- 模型实验室 ----
 MODEL_LIST.forEach(mk => {
   const b = document.createElement("button");
-  b.textContent = "训练 " + MODEL_LABEL[mk]; b.style.cssText = "font-size:11px;padding:2px 6px;";
-  b.title = "训练 " + MODEL_LABEL[mk] + " + 回测，结果进下表";
+  b.textContent = MODEL_LABEL[mk]; b.style.cssText = "font-size:11px;padding:2px 6px;";
+  b.title = MODEL_LABEL[mk] + "：训练 + 回测，结果进下表";
   b.addEventListener("click", () => runModelEval(mk));
   $modelBtns.appendChild(b);
 });
