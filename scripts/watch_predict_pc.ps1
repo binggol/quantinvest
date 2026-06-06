@@ -198,7 +198,10 @@ while ($true) {
         Push-Location "C:\rdagent"
         python post_process.py
         $pp = $LASTEXITCODE
+        # 给本次预测的买入清单打上 模型+批次 标签 (供网页对比)
+        $env:RDAGENT_TAG_BUYLIST = "1"; $env:RDAGENT_MODEL = $rdModel; $env:RDAGENT_FACTOR_BATCH = $rdBatch
         python export_rdagent.py
+        Remove-Item Env:\RDAGENT_TAG_BUYLIST -ErrorAction SilentlyContinue
         Pop-Location
         if ($pp -eq 0) { Write-RdStatus "done" "done"; Write-Host "[watch] RD-Agent done" -ForegroundColor Green }
         else { Write-RdStatus "error" "post_process exit $pp"; Write-Host "[watch] RD-Agent post_process failed $pp" -ForegroundColor Red }

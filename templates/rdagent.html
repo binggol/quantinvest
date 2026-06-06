@@ -60,6 +60,7 @@
         </table>
         <div style="margin-top:6px;">
           <button id="btn-predict-sel" disabled style="width:100%;">📈 用选定模型预测下一交易日</button>
+          <button id="btn-cmp" style="width:100%;margin-top:4px;">📊 对比各模型买入清单</button>
         </div>
       </div>
     </div>
@@ -72,6 +73,14 @@
   </aside>
 
   <main class="screen-main">
+    <div id="cmp-panel" style="display:none;background:#0f172a;border:1px solid #334155;border-radius:4px;padding:8px;margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <b style="color:#e2e8f0;">📊 买入清单对比 <span style="color:#64748b;font-size:11px;">(同一票在多个清单出现→高亮)</span></b>
+        <button id="cmp-close" style="font-size:11px;">✕ 关闭</button>
+      </div>
+      <div id="cmp-picker" style="display:flex;flex-wrap:wrap;gap:8px;margin:6px 0;font-size:12px;"></div>
+      <div id="cmp-cols" style="display:flex;gap:8px;overflow-x:auto;"></div>
+    </div>
     <div class="mini-controls">
       <label class="ctrl-group">复权:
         <select id="mini-adjust">
@@ -175,6 +184,61 @@ function renderModelTable() {
       $btnPredictSel.disabled = false; $btnPredictSel.textContent = `📈 用 ${MODEL_LABEL[r.model]} 预测下一交易日`;
     });
     $modelTbody.appendChild(tr);
+  });
+}
+
+// ---- 买入清单对比 ----
+const $btnCmp = document.getElementById("btn-cmp");
+const $cmpPanel = document.getElementById("cmp-panel");
+const $cmpPicker = document.getElementById("cmp-picker");
+const $cmpCols = document.getElementById("cmp-cols");
+document.getElementById("cmp-close").addEventListener("click", () => { $cmpPanel.style.display = "none"; });
+let buylistsIndex = [], cmpData = {}, cmpChecked = new Set();
+$btnCmp.addEventListener("click", openCmp);
+
+async function openCmp() {
+  $cmpPanel.style.display = "block";
+  cmpData = {};
+  try { const j = await (await fetch("/api/rdagent/buylists")).json(); buylistsIndex = j.buylists || []; }
+  catch (e) { buylistsIndex = []; }
+  const b = $batchSel.value || "default";
+  const avail = buylistsIndex.filter(x => x.batch === b);
+  cmpChecked = new Set(avail.map(x => x.tag));
+  renderCmpPicker(avail);
+  await renderCmpCols();
+}
+function renderCmpPicker(avail) {
+  if (!avail.length) {
+    $cmpPicker.innerHTML = `<span style="color:#64748b;">当前批次还没有买入清单。先在左侧选模型 → 点"📈 用XX预测下一交易日"生成（每个模型各生成一份）。</span>`;
+    $cmpCols.innerHTML = ""; return;
+  }
+  $cmpPicker.innerHTML = avail.map(x =>
+    `<label style="color:#cbd5e1;"><input type="checkbox" data-tag="${x.tag}" ${cmpChecked.has(x.tag) ? 'checked' : ''}/> ${MODEL_LABEL[x.model] || x.model} <span style="color:#64748b">(${x.n_hits}只·${x.as_of || ''})</span></label>`).join("");
+  $cmpPicker.querySelectorAll("input").forEach(cb => cb.addEventListener("change", () => {
+    if (cb.checked) cmpChecked.add(cb.dataset.tag); else cmpChecked.delete(cb.dataset.tag);
+    renderCmpCols();
+  }));
+}
+async function renderCmpCols() {
+  const tags = [...cmpChecked];
+  for (const t of tags) if (!cmpData[t]) {
+    try { cmpData[t] = await (await fetch(`/api/rdagent/buylist?tag=${encodeURIComponent(t)}`)).json(); }
+    catch (e) { cmpData[t] = { hits: [] }; }
+  }
+  const cnt = {};
+  tags.forEach(t => (cmpData[t].hits || []).forEach(h => { cnt[h.code] = (cnt[h.code] || 0) + 1; }));
+  $cmpCols.innerHTML = "";
+  if (!tags.length) { $cmpCols.innerHTML = `<span style="color:#64748b;">勾选上面的模型来对比</span>`; return; }
+  tags.forEach(t => {
+    const d = cmpData[t]; const model = d.model || t.split("__")[1];
+    const col = document.createElement("div");
+    col.style.cssText = "min-width:155px;flex:1;";
+    const rows = (d.hits || []).slice(0, 30).map(h => {
+      const shared = cnt[h.code] >= 2;
+      return `<div style="font-size:11px;padding:1px 3px;white-space:nowrap;${shared ? 'background:#14532d;color:#bbf7d0;' : 'color:#cbd5e1;'}">${h.rank || ''}. ${h.code} ${h.name || ''}</div>`;
+    }).join("");
+    col.innerHTML = `<div style="font-weight:bold;color:#7dd3fc;border-bottom:1px solid #334155;margin-bottom:3px;">${MODEL_LABEL[model] || model} <span style="color:#64748b;font-size:10px;">${(d.hits || []).length}只</span></div>${rows}`;
+    $cmpCols.appendChild(col);
   });
 }
 

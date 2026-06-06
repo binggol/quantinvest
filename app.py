@@ -1137,6 +1137,28 @@ def api_rdagent_model_results():
     return jsonify(data)
 
 
+@app.route("/api/rdagent/buylists")
+def api_rdagent_buylists():
+    """模型实验室: 列出已生成的各模型买入清单 (供并排对比)."""
+    data = _read_json(PREDICT_JSON.parent / "buylists_index.json")
+    if not data:
+        return jsonify({"buylists": []})
+    return jsonify(data)
+
+
+@app.route("/api/rdagent/buylist")
+def api_rdagent_buylist():
+    """读取某个 tag 的买入清单 (tag = <batch>__<model>)."""
+    import re as _re
+    tag = (request.args.get("tag", "") or "").strip()
+    if not tag or not _re.fullmatch(r"[A-Za-z0-9_]+", tag):
+        return jsonify({"error": "bad tag"}), 400
+    data = _read_json(PREDICT_JSON.parent / f"buylist_{tag}.json")
+    if data is None:
+        return jsonify({"error": "not found"}), 404
+    return jsonify(data)
+
+
 @app.route("/api/rdagent/model_eval")
 def api_rdagent_model_eval():
     """网页按钮触发: 在指定批次上训练某模型 + 回测, 结果回写 model_results.json. PC 执行.
