@@ -300,6 +300,7 @@ async function load() {
     if (busy) {
       $rdStat.innerHTML = `<span class="warn">⏳ ${st && st.state === "running" ? ("PC 处理中: " + (st.msg || "RD-Agent")) : "已提交, 等待 PC 开始..."}</span>`;
       setBtns(true);
+      loadModelResults();   // 任务进行中也刷新模型表 (一键全跑时逐个填入)
       if (!pollTimer) pollTimer = setInterval(load, 8000);
     } else {
       setBtns(false);
