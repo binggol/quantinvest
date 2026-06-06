@@ -1137,6 +1137,23 @@ def api_rdagent_model_results():
     return jsonify(data)
 
 
+@app.route("/api/rdagent/run_all")
+def api_rdagent_run_all():
+    """网页按钮触发: 在指定批次上把所有模型 训练+回测 + 各出买入清单 (供对比). PC 执行, 较慢."""
+    if RDAGENT_REQUEST.exists():
+        return jsonify({"ok": False, "message": "已有 RD-Agent 任务在排队/处理中"})
+    batch = (request.args.get("batch", "") or "").strip()
+    try:
+        RDAGENT_REQUEST.parent.mkdir(parents=True, exist_ok=True)
+        RDAGENT_REQUEST.write_text(json.dumps(
+            {"requested_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "run_all": True, "batch": batch},
+            ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"写请求失败: {e}"})
+    bmsg = f" [批次 {batch}]" if batch else ""
+    return jsonify({"ok": True, "message": f"已通知 PC: 一键全跑6个模型 训练+回测+出清单{bmsg} (较慢, 约30-60分钟)"})
+
+
 @app.route("/api/rdagent/buylists")
 def api_rdagent_buylists():
     """模型实验室: 列出已生成的各模型买入清单 (供并排对比)."""

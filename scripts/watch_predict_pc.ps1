@@ -83,7 +83,7 @@ while ($true) {
   if (Test-Path $rdReqFile) {
     # request flags: mine(因子挖掘) / retrain / batch(因子批次标签) / loop_n(挖掘轮数)
     $rdRetrain = $false   # web 默认快速预测(复用缓存); 缓存不存在时 predict_next_day 自动回退重训
-    $rdBatch = ""; $rdMine = $false; $rdLoopN = 5; $rdModelEval = $false; $rdModel = "lgb"
+    $rdBatch = ""; $rdMine = $false; $rdLoopN = 5; $rdModelEval = $false; $rdModel = "lgb"; $rdRunAll = $false
     try {
       $rr = (Get-Content $rdReqFile -Raw | ConvertFrom-Json)
       if ($null -ne $rr.retrain)    { $rdRetrain = [bool]$rr.retrain }
@@ -92,7 +92,40 @@ while ($true) {
       if ($null -ne $rr.loop_n)     { $rdLoopN = [int]$rr.loop_n }
       if ($null -ne $rr.model_eval) { $rdModelEval = [bool]$rr.model_eval }
       if ($null -ne $rr.model)      { $rdModel = [string]$rr.model }
+      if ($null -ne $rr.run_all)    { $rdRunAll = [bool]$rr.run_all }
     } catch {}
+
+    # ===== 一键全跑: 所有模型 训练+回测 + 各出买入清单 (供对比). 同步一次数据后循环。 =====
+    if ($rdRunAll) {
+      $models = @("lgb","xgb","catboost","ols","ridge","lasso")
+      Write-Host "[watch] RUN ALL on batch '$rdBatch'..." -ForegroundColor Cyan
+      Write-RdStatus "running" "一键全跑: 同步数据 (robocopy Z->C)"
+      robocopy "$qlibData" "C:\qlib_data\cn_data" /MIR /MT:8 /R:1 /W:2 /XF csi300.txt csi300.txt.bak /NFL /NDL /NJH /NP | Out-Null
+      if (-not $env:TUSHARE_TOKEN -and (Test-Path "$proj\data\.tushare_token")) { $env:TUSHARE_TOKEN = (Get-Content "$proj\data\.tushare_token" -Raw).Trim() }
+      Write-RdStatus "running" "一键全跑: 重建 csi300 universe"
+      Push-Location "C:\rdagent"; python build_csi300.py; Pop-Location
+      $n = $models.Count; $i = 0
+      foreach ($m in $models) {
+        $i++
+        Write-RdStatus "running" "一键全跑 ($i/$n): $m 训练+回测"
+        wsl -e bash -lc "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent && cd /mnt/c/rdagent && RDAGENT_MODEL='$m' RDAGENT_FACTOR_BATCH='$rdBatch' python run_model.py"
+        if (Test-Path "C:\rdagent\model_results.json") { Copy-Item "C:\rdagent\model_results.json" (Join-Path $shared "model_results.json") -Force }
+        Write-RdStatus "running" "一键全跑 ($i/$n): $m 预测买入清单"
+        wsl -e bash -lc "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent && cd /mnt/c/rdagent && RDAGENT_RETRAIN=1 RDAGENT_MODEL='$m' RDAGENT_FACTOR_BATCH='$rdBatch' python predict_next_day.py"
+        if ($LASTEXITCODE -eq 0) {
+          Push-Location "C:\rdagent"
+          python post_process.py
+          $env:RDAGENT_TAG_BUYLIST = "1"; $env:RDAGENT_MODEL = $m; $env:RDAGENT_FACTOR_BATCH = $rdBatch
+          python export_rdagent.py
+          Remove-Item Env:\RDAGENT_TAG_BUYLIST -ErrorAction SilentlyContinue
+          Pop-Location
+        }
+      }
+      Write-RdStatus "done" "一键全跑完成: $n 个模型已回测+出清单, 点 📊 对比"
+      Write-Host "[watch] run all done" -ForegroundColor Green
+      Remove-Item $rdReqFile -Force -ErrorAction SilentlyContinue
+      continue
+    }
 
     # ===== 模型实验室: 训练指定模型 + 回测, 结果写 model_results.json (供网页对比) =====
     if ($rdModelEval) {

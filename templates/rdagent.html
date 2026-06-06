@@ -53,6 +53,7 @@
         <h3 style="margin:0 0 4px;">🧪 模型实验室</h3>
         <div style="font-size:11px;color:#94a3b8;margin-bottom:4px;">在所选批次上训练+回测各模型，结果对比</div>
         <div id="model-btns" style="display:flex;flex-wrap:wrap;gap:4px;"></div>
+        <button id="btn-runall" style="width:100%;margin-top:5px;">🚀 一键全跑（所有模型 重训+回测+出清单）</button>
         <table id="model-table" style="width:100%;margin-top:8px;font-size:11px;border-collapse:collapse;">
           <thead><tr style="color:#cbd5e1;text-align:right;">
             <th style="text-align:left;">模型</th><th>RankIC</th><th>超额</th><th>IR</th><th>回撤</th><th></th></tr></thead>
@@ -118,15 +119,24 @@ const $rdStat = document.getElementById("rd-stat");
 const $modelBtns = document.getElementById("model-btns");
 const $modelTbody = document.getElementById("model-tbody");
 const $btnPredictSel = document.getElementById("btn-predict-sel");
+const $btnRunAll = document.getElementById("btn-runall");
 const MODEL_LIST = ["lgb","xgb","catboost","ols","ridge","lasso"];
 const MODEL_LABEL = {lgb:"LGB",xgb:"XGB",catboost:"CatBoost",ols:"OLS",ridge:"Ridge",lasso:"Lasso"};
 let batchData = { batches: [], default_factors: [], default_n: 0 };
 let modelResults = [], selectedModel = null;
 function setBtns(disabled) {
-  $btnFast.disabled = disabled; $btnMine.disabled = disabled;
+  $btnFast.disabled = disabled; $btnMine.disabled = disabled; $btnRunAll.disabled = disabled;
   $btnPredictSel.disabled = disabled || !selectedModel;
   document.querySelectorAll('#model-btns button').forEach(b => b.disabled = disabled);
 }
+$btnRunAll.addEventListener("click", async () => {
+  if (!confirm("一键全跑：在所选批次上把 6 个模型全部【重训+回测+预测出清单】。\n约 30-60 分钟，期间别点其他按钮。确定？")) return;
+  setBtns(true); $rdStat.textContent = "启动一键全跑...";
+  try {
+    const j = await (await fetch(`/api/rdagent/run_all?batch=${encodeURIComponent($batchSel.value)}`)).json();
+    $rdStat.textContent = j.message || ""; setTimeout(load, 1500);
+  } catch (e) { $rdStat.innerHTML = `<span class="warn">⚠️ ${e.message}</span>`; setBtns(false); }
+});
 $miniAdjust.addEventListener("change", () => { if (selectedIdx >= 0) loadMiniKline(results[selectedIdx]); });
 $btnFast.addEventListener("click", () => runRefresh(false));
 $btnMine.addEventListener("click", runMine);
