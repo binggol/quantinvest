@@ -66,6 +66,9 @@
       </div>
     </div>
     <div class="screen-results">
+      <div style="margin-bottom:4px;font-size:12px;color:#cbd5e1;">清单来源:
+        <select id="buylist-src" style="font-size:12px;max-width:180px;"></select>
+      </div>
       <table id="result-table">
         <thead id="result-thead"></thead>
         <tbody id="result-tbody"></tbody>
@@ -140,7 +143,7 @@ $btnRunAll.addEventListener("click", async () => {
 $miniAdjust.addEventListener("change", () => { if (selectedIdx >= 0) loadMiniKline(results[selectedIdx]); });
 $btnFast.addEventListener("click", () => runRefresh(false));
 $btnMine.addEventListener("click", runMine);
-$batchSel.addEventListener("change", () => { showBatchFactors(); selectedModel = null; $btnPredictSel.disabled = true; renderModelTable(); });
+$batchSel.addEventListener("change", () => { showBatchFactors(); selectedModel = null; $btnPredictSel.disabled = true; renderModelTable(); buylistSrc = ""; loadBuylists(); });
 
 // ---- 模型实验室 ----
 MODEL_LIST.forEach(mk => {
@@ -252,6 +255,32 @@ async function renderCmpCols() {
   });
 }
 
+// ---- 主清单按模型切换 ----
+const $buylistSrc = document.getElementById("buylist-src");
+let buylistSrc = "";
+$buylistSrc.addEventListener("change", applyBuylistSrc);
+async function loadBuylists() {
+  try { const j = await (await fetch("/api/rdagent/buylists")).json(); buylistsIndex = j.buylists || []; }
+  catch (e) { buylistsIndex = []; }
+  renderBuylistSrcSel();
+}
+function renderBuylistSrcSel() {
+  const b = $batchSel.value || "default";
+  const avail = buylistsIndex.filter(x => x.batch === b);
+  $buylistSrc.innerHTML = '<option value="">默认 (最新预测)</option>' +
+    avail.map(x => `<option value="${x.tag}" ${x.tag === buylistSrc ? 'selected' : ''}>${MODEL_LABEL[x.model] || x.model} 清单 (${x.n_hits}只)</option>`).join("");
+}
+async function applyBuylistSrc() {
+  buylistSrc = $buylistSrc.value;
+  if (!buylistSrc) { load(); return; }
+  try {
+    const d = await (await fetch(`/api/rdagent/buylist?tag=${encodeURIComponent(buylistSrc)}`)).json();
+    results = d.hits || []; selectedIdx = -1; renderTable();
+    if (results.length) selectRow(0);
+    $info.innerHTML = `<b>${MODEL_LABEL[d.model] || d.model}</b> 模型清单 · 基于 ${d.as_of || '?'} 数据`;
+  } catch (e) {}
+}
+
 async function runMine() {
   const n = parseInt($mineLoops.value) || 5;
   if (!confirm(`确定开始 RD-Agent 因子挖掘？\n轮数 loop_n=${n}，预计几小时、消耗 LLM 费用，且需要 PC 上 Docker 已启动。\n挖掘会生成一个新因子批次（不改变当前默认）。`)) return;
@@ -304,7 +333,7 @@ async function load() {
       if (!pollTimer) pollTimer = setInterval(load, 8000);
     } else {
       setBtns(false);
-      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; loadModelResults(); }
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; loadModelResults(); loadBuylists(); }
       if (st) { const m = {idle:"",done:"上次已完成",error:"RD-Agent 出错: "+(st.msg||"")}; if (m[st.state]) $rdStat.textContent = m[st.state]; }
     }
     if (j.generated_at !== undefined && j.generated_at !== lastGen) lastGen = j.generated_at;
@@ -312,9 +341,11 @@ async function load() {
     $info.innerHTML = `基于 <b>${j.as_of || "?"}</b> 数据 · 预测下一交易日<br><span style="color:#64748b">${j.source || ""}</span>`;
     showBatchFactors();   // chips 跟随所选因子批次
     $report.textContent = j.report || "(无报告)";
-    results = j.hits || [];
-    renderTable();
-    if (results.length && selectedIdx < 0) selectRow(0);
+    if (!buylistSrc) {   // 仅"默认(最新)"时由 rdagent.json 驱动主表; 选了某模型清单则保持
+      results = j.hits || [];
+      renderTable();
+      if (results.length && selectedIdx < 0) selectRow(0);
+    }
   } catch (e) { $info.innerHTML = `<span class="warn">⚠️ ${e.message}</span>`; }
 }
 
@@ -384,7 +415,7 @@ document.addEventListener("keydown",(e)=>{
   if(e.key==="ArrowDown"){e.preventDefault();selectRow(Math.min(results.length-1,selectedIdx+1));}
   else if(e.key==="ArrowUp"){e.preventDefault();selectRow(Math.max(0,selectedIdx-1));}
 });
-loadBatches().then(() => { showBatchFactors(); renderModelTable(); load(); loadModelResults(); });
+loadBatches().then(() => { showBatchFactors(); renderModelTable(); load(); loadModelResults(); loadBuylists(); });
 </script>
 </body>
 </html>
