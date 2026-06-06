@@ -110,6 +110,7 @@ while ($true) {
         Write-RdStatus "running" "一键全跑 ($i/$n): $m 训练+回测"
         wsl -e bash -lc "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent && cd /mnt/c/rdagent && RDAGENT_MODEL='$m' RDAGENT_FACTOR_BATCH='$rdBatch' python run_model.py"
         if (Test-Path "C:\rdagent\model_results.json") { Copy-Item "C:\rdagent\model_results.json" (Join-Path $shared "model_results.json") -Force }
+      if (Test-Path "C:\rdagent\model_runs_history.json") { Copy-Item "C:\rdagent\model_runs_history.json" (Join-Path $shared "model_runs_history.json") -Force }
         Write-RdStatus "running" "一键全跑 ($i/$n): $m 预测买入清单"
         wsl -e bash -lc "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent && cd /mnt/c/rdagent && RDAGENT_RETRAIN=1 RDAGENT_MODEL='$m' RDAGENT_FACTOR_BATCH='$rdBatch' python predict_next_day.py"
         if ($LASTEXITCODE -eq 0) {
@@ -134,6 +135,7 @@ while ($true) {
       wsl -e bash -lc "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent && cd /mnt/c/rdagent && RDAGENT_MODEL='$rdModel' RDAGENT_FACTOR_BATCH='$rdBatch' python run_model.py"
       $meExit = $LASTEXITCODE
       if (Test-Path "C:\rdagent\model_results.json") { Copy-Item "C:\rdagent\model_results.json" (Join-Path $shared "model_results.json") -Force }
+      if (Test-Path "C:\rdagent\model_runs_history.json") { Copy-Item "C:\rdagent\model_runs_history.json" (Join-Path $shared "model_runs_history.json") -Force }
       if ($meExit -eq 0) { Write-RdStatus "done" "model eval 完成: $rdModel [batch=$rdBatch]"; Write-Host "[watch] model eval done" -ForegroundColor Green }
       else { Write-RdStatus "error" "model eval $rdModel 失败 exit $meExit" }
       Remove-Item $rdReqFile -Force -ErrorAction SilentlyContinue

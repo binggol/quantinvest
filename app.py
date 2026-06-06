@@ -1137,6 +1137,15 @@ def api_rdagent_model_results():
     return jsonify(data)
 
 
+@app.route("/api/rdagent/model_history")
+def api_rdagent_model_history():
+    """模型实验室: 每次跑的历史记录 (不去重, 供按模型/批次/时间对比)."""
+    data = _read_json(PREDICT_JSON.parent / "model_runs_history.json")
+    if not data:
+        return jsonify({"runs": []})
+    return jsonify(data)
+
+
 @app.route("/api/rdagent/run_all")
 def api_rdagent_run_all():
     """网页按钮触发: 在指定批次上把所有模型 训练+回测 + 各出买入清单 (供对比). PC 执行, 较慢."""

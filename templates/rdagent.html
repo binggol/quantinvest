@@ -62,6 +62,7 @@
         <div style="margin-top:6px;">
           <button id="btn-predict-sel" disabled style="width:100%;">📈 用选定模型预测下一交易日</button>
           <button id="btn-cmp" style="width:100%;margin-top:4px;">📊 对比各模型买入清单</button>
+          <button id="btn-hist" style="width:100%;margin-top:4px;">📜 运行历史（按时间/模型对比）</button>
         </div>
       </div>
     </div>
@@ -84,6 +85,21 @@
       </div>
       <div id="cmp-picker" style="display:flex;flex-wrap:wrap;gap:8px;margin:6px 0;font-size:12px;"></div>
       <div id="cmp-cols" style="display:flex;gap:8px;overflow-x:auto;"></div>
+    </div>
+    <div id="hist-panel" style="display:none;background:#0f172a;border:1px solid #334155;border-radius:4px;padding:8px;margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <b style="color:#e2e8f0;">📜 运行历史 <span style="color:#64748b;font-size:11px;">(每次跑都留档，看同模型/同批次不同时间的差异)</span></b>
+        <button id="hist-close" style="font-size:11px;">✕ 关闭</button>
+      </div>
+      <div style="margin:6px 0;font-size:12px;color:#cbd5e1;">
+        筛选 模型 <select id="hist-model"></select>　批次 <select id="hist-batch"></select>
+      </div>
+      <table style="width:100%;font-size:11px;border-collapse:collapse;">
+        <thead><tr style="color:#cbd5e1;text-align:right;">
+          <th style="text-align:left;">时间</th><th style="text-align:left;">批次</th><th style="text-align:left;">模型</th>
+          <th>RankIC</th><th>超额</th><th>IR</th><th>回撤</th></tr></thead>
+        <tbody id="hist-tbody"></tbody>
+      </table>
     </div>
     <div class="mini-controls">
       <label class="ctrl-group">复权:
@@ -279,6 +295,43 @@ async function applyBuylistSrc() {
     if (results.length) selectRow(0);
     $info.innerHTML = `<b>${MODEL_LABEL[d.model] || d.model}</b> 模型清单 · 基于 ${d.as_of || '?'} 数据`;
   } catch (e) {}
+}
+
+// ---- 运行历史 ----
+const $btnHist = document.getElementById("btn-hist");
+const $histPanel = document.getElementById("hist-panel");
+const $histModel = document.getElementById("hist-model");
+const $histBatch = document.getElementById("hist-batch");
+const $histTbody = document.getElementById("hist-tbody");
+let histRuns = [];
+document.getElementById("hist-close").addEventListener("click", () => { $histPanel.style.display = "none"; });
+$btnHist.addEventListener("click", openHist);
+$histModel.addEventListener("change", renderHist);
+$histBatch.addEventListener("change", renderHist);
+
+async function openHist() {
+  $histPanel.style.display = "block";
+  try { const j = await (await fetch("/api/rdagent/model_history")).json(); histRuns = j.runs || []; }
+  catch (e) { histRuns = []; }
+  const models = [...new Set(histRuns.map(r => r.model))];
+  const batches = [...new Set(histRuns.map(r => r.batch))];
+  $histModel.innerHTML = '<option value="">全部模型</option>' + models.map(m => `<option value="${m}">${MODEL_LABEL[m] || m}</option>`).join("");
+  $histBatch.innerHTML = '<option value="">全部批次</option>' + batches.map(b => `<option value="${b}">${b}</option>`).join("");
+  renderHist();
+}
+function renderHist() {
+  const fm = $histModel.value, fb = $histBatch.value;
+  const rows = histRuns
+    .filter(r => (!fm || r.model === fm) && (!fb || r.batch === fb))
+    .sort((a, c) => (c.updated_at || "").localeCompare(a.updated_at || ""));
+  $histTbody.innerHTML = rows.length ? rows.map(r =>
+    `<tr style="text-align:right;"><td style="text-align:left;color:#94a3b8;">${r.updated_at || ''}</td>` +
+    `<td style="text-align:left;">${r.batch}</td><td style="text-align:left;">${MODEL_LABEL[r.model] || r.model}</td>` +
+    `<td>${(r.rank_ic || 0).toFixed(4)}</td>` +
+    `<td style="color:${r.excess >= 0 ? '#22c55e' : '#ef4444'}">${(r.excess * 100).toFixed(1)}%</td>` +
+    `<td>${(r.ir || 0).toFixed(2)}</td>` +
+    `<td style="color:#f59e0b">${(r.maxdd * 100).toFixed(1)}%</td></tr>`).join("")
+    : `<tr><td colspan="7" style="color:#64748b;">暂无历史。再跑几次模型后，这里就能看到同模型/同批次不同时间的差异。</td></tr>`;
 }
 
 async function runMine() {
