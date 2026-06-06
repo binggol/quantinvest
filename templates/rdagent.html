@@ -152,7 +152,13 @@ function renderModelTable() {
   const rows = modelResults.filter(r => r.batch === b).sort((a, c) => c.excess - a.excess);
   const best = rows.length ? rows[0].model : null;
   $modelTbody.innerHTML = "";
-  if (!rows.length) { $modelTbody.innerHTML = `<tr><td colspan="6" style="color:#64748b;">该批次暂无结果，点上面按钮跑一个模型</td></tr>`; return; }
+  if (!rows.length) { $modelTbody.innerHTML = `<tr><td colspan="6" style="color:#64748b;">该批次暂无结果，点上面按钮跑一个模型</td></tr>`; selectedModel = null; $btnPredictSel.disabled = true; $btnPredictSel.textContent = "📈 用选定模型预测下一交易日"; return; }
+  // 默认选中最优模型, 让预测按钮可用 (用户点别的行可改选)
+  if (!selectedModel || !rows.some(r => r.model === selectedModel)) {
+    selectedModel = best;
+    $btnPredictSel.disabled = false;
+    $btnPredictSel.textContent = `📈 用 ${MODEL_LABEL[best]} 预测下一交易日`;
+  }
   rows.forEach(r => {
     const tr = document.createElement("tr");
     tr.style.cssText = "text-align:right;cursor:pointer;" + (r.model === selectedModel ? "background:#1e3a5f;" : "");
