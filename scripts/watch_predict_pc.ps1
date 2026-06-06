@@ -21,6 +21,7 @@ $reqFile    = Join-Path $shared "predict_request.json"
 $statusFile = Join-Path $shared "predict_status.json"
 $rdReqFile    = Join-Path $shared "rdagent_request.json"
 $rdStatusFile = Join-Path $shared "rdagent_status.json"
+$taReqFile    = Join-Path $shared "ta_request.json"     # TradingAgents 分析请求
 
 $env:QLIB_DATA_PATH      = $qlibData
 $env:PARQUET_DIR         = Join-Path $shared "tushare_daily"
@@ -244,6 +245,18 @@ while ($true) {
       }
     }
     Remove-Item $rdReqFile -Force -ErrorAction SilentlyContinue
+  }
+
+  # ===== TradingAgents 多智能体分析 (对选中股票深度分析, LLM 重型, 每只几分钟) =====
+  if (Test-Path $taReqFile) {
+    Write-Host "[watch] TradingAgents 分析请求..." -ForegroundColor Cyan
+    $env:SHARED_DIR = $shared
+    if (-not $env:TUSHARE_TOKEN -and (Test-Path "$proj\data\.tushare_token")) { $env:TUSHARE_TOKEN = (Get-Content "$proj\data\.tushare_token" -Raw).Trim() }
+    Push-Location "Z:\claude\tradingagents"
+    & "D:\anaconda3\python.exe" run_tradingagents.py
+    Pop-Location
+    Remove-Item $taReqFile -Force -ErrorAction SilentlyContinue
+    Write-Host "[watch] TradingAgents 分析结束" -ForegroundColor Green
   }
   Start-Sleep -Seconds 15
 }

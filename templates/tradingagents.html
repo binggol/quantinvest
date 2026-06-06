@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>quantinvest · TradingAgents 深度分析</title>
+<link rel="stylesheet" href="/static/style.css"/>
+<style>
+.ta-pick { display:flex; flex-wrap:wrap; gap:4px 10px; max-height:240px; overflow:auto; }
+.ta-pick label { color:#cbd5e1; font-size:12px; white-space:nowrap; }
+.ta-card { background:#0f172a; border:1px solid #334155; border-radius:6px; padding:10px; margin-bottom:10px; }
+.ta-decision { font-weight:bold; font-size:14px; padding:2px 8px; border-radius:4px; }
+.ta-sec summary { color:#7dd3fc; font-size:12px; cursor:pointer; margin-top:5px; }
+.ta-sec .body { white-space:pre-wrap; font-size:11px; color:#cbd5e1; background:#0b1220;
+  border:1px solid #1e293b; border-radius:4px; padding:8px; max-height:300px; overflow:auto; margin-top:3px; }
+</style>
+</head>
+<body>
+<header class="screen-header">
+  <h1>🕵️ quantinvest</h1>
+  <nav class="topnav">
+    <a href="/">K线浏览</a>
+    <a href="/screen">选股</a>
+    <a href="/pattern">杯柄形态</a>
+    <a href="/rdagent">RD-Agent因子</a>
+    <a href="/tradingagents" class="active">TradingAgents分析</a>
+  </nav>
+  <div class="meta" id="meta">对买入清单里的股票做多智能体深度分析(市场/新闻/基本面 + 多空辩论 → 决策) · 仅研究参考</div>
+</header>
+
+<div class="screen-layout">
+  <aside class="screen-side">
+    <div class="screen-criteria">
+      <h3>🕵️ 选股分析</h3>
+      <div class="c-row" id="src-info" style="font-size:12px;color:#94a3b8;">加载买入清单中...</div>
+      <div style="margin:6px 0;">
+        <button id="btn-all" style="font-size:11px;">全选</button>
+        <button id="btn-none" style="font-size:11px;">清空</button>
+      </div>
+      <div class="ta-pick" id="pick"></div>
+      <button id="btn-analyze" style="margin-top:8px;width:100%;">🕵️ 深度分析选中股票</button>
+      <div id="ta-stat" class="hit-stat" style="margin-top:6px;"></div>
+      <div style="font-size:11px;color:#64748b;margin-top:6px;">每只约几分钟(多智能体辩论, LLM 重型),建议一次选 1-5 只。上限 10 只。</div>
+    </div>
+  </aside>
+
+  <main class="screen-main">
+    <div id="ta-results"></div>
+  </main>
+</div>
+
+<script>
+const $srcInfo = document.getElementById("src-info");
+const $pick = document.getElementById("pick");
+const $btnAnalyze = document.getElementById("btn-analyze");
+const $taStat = document.getElementById("ta-stat");
+const $results = document.getElementById("ta-results");
+let buylist = [], asOf = "", pollTimer = null;
+
+document.getElementById("btn-all").addEventListener("click", () => { $pick.querySelectorAll("input").forEach(c=>c.checked=true); });
+document.getElementById("btn-none").addEventListener("click", () => { $pick.querySelectorAll("input").forEach(c=>c.checked=false); });
+$btnAnalyze.addEventListener("click", analyze);
+
+async function loadBuylist() {
+  try {
+    const j = await (await fetch("/api/rdagent")).json();
+    buylist = j.hits || []; asOf = j.as_of || "";
+    $srcInfo.innerHTML = `买入清单(${buylist.length} 只) · 基于 <b>${asOf||"?"}</b> · 勾选要深度分析的股票`;
+    $pick.innerHTML = buylist.map(h =>
+      `<label><input type="checkbox" value="${h.ts_code||h.code}" data-name="${h.name||''}"/> ${h.code} ${h.name||''}</label>`).join("");
+  } catch (e) { $srcInfo.innerHTML = `<span class="warn">买入清单加载失败: ${e.message}</span>`; }
+}
+
+async function analyze() {
+  const tickers = [...$pick.querySelectorAll("input:checked")].map(c => c.value);
+  if (!tickers.length) { $taStat.innerHTML = `<span class="warn">请先勾选股票</span>`; return; }
+  if (tickers.length > 10) { $taStat.innerHTML = `<span class="warn">最多 10 只</span>`; return; }
+  $btnAnalyze.disabled = true;
+  $taStat.textContent = "启动分析...";
+  try {
+    const url = `/api/tradingagents/analyze?tickers=${encodeURIComponent(tickers.join(","))}&date=${encodeURIComponent(asOf)}`;
+    const j = await (await fetch(url)).json();
+    $taStat.textContent = j.message || "";
+    setTimeout(loadResults, 1500);
+  } catch (e) { $taStat.innerHTML = `<span class="warn">⚠️ ${e.message}</span>`; $btnAnalyze.disabled = false; }
+}
+
+async function loadResults() {
+  let j;
+  try { j = await (await fetch("/api/tradingagents/results")).json(); }
+  catch (e) { return; }
+  const st = j.status || {};
+  const busy = j.pending || (st.state === "running");
+  if (busy) {
+    $taStat.innerHTML = `<span class="warn">⏳ ${st.msg || "分析中..."}</span>`;
+    $btnAnalyze.disabled = true;
+    if (!pollTimer) pollTimer = setInterval(loadResults, 8000);
+  } else {
+    $btnAnalyze.disabled = false;
+    if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    if (st.state === "done") $taStat.textContent = "分析完成";
+    else if (st.state === "error") $taStat.innerHTML = `<span class="warn">出错: ${st.msg||""}</span>`;
+  }
+  renderResults(j.results || []);
+}
+
+function decColor(d) {
+  d = (d || "").toUpperCase();
+  if (d.includes("BUY") || d.includes("买")) return "#22c55e";
+  if (d.includes("SELL") || d.includes("卖")) return "#ef4444";
+  return "#f59e0b";
+}
+function sec(title, text) {
+  if (!text) return "";
+  return `<details class="ta-sec"><summary>${title}</summary><div class="body">${(text+"").replace(/</g,"&lt;")}</div></details>`;
+}
+function renderResults(rows) {
+  if (!rows.length) { $results.innerHTML = `<div style="color:#64748b;padding:10px;">左侧勾选股票 → 点"深度分析",结果会显示在这里。</div>`; return; }
+  $results.innerHTML = rows.map(r => {
+    if (r.error) return `<div class="ta-card"><b>${r.ticker}</b> <span class="warn">分析失败: ${r.error}</span></div>`;
+    return `<div class="ta-card">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <b style="font-size:14px;">${r.ticker}</b>
+        <span class="ta-decision" style="background:${decColor(r.decision)}22;color:${decColor(r.decision)};">决策: ${r.decision||"-"}</span>
+      </div>
+      <div style="font-size:11px;color:#64748b;">基于 ${r.date||""} · ${r.updated_at||""}</div>
+      ${sec("📊 市场/技术面", r.market_report)}
+      ${sec("📰 新闻面", r.news_report)}
+      ${sec("📈 基本面", r.fundamentals_report)}
+      ${sec("🐂 多方观点", r.bull)}
+      ${sec("🐻 空方观点", r.bear)}
+      ${sec("🧭 研究经理结论", r.investment_plan)}
+      ${sec("💼 交易员计划", r.trader_plan)}
+      ${sec("✅ 最终决策(含风控)", r.final_decision)}
+    </div>`;
+  }).join("");
+}
+
+loadBuylist().then(loadResults);
+</script>
+</body>
+</html>
