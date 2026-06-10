@@ -209,6 +209,9 @@ function render(d){
   const fn=(t&&t.final_nav)?t.final_nav:null, yr=(t&&t.years)?t.years:null;
   curveTitle=`对冲后净超额 净值曲线 (起点1.0${fn?` → ${fn}倍 / ${yr}年`:""})`;
   drawCurve();
+  // 初始 #result 为 display:none, init 时容器高度为0导致图很小; 显示后强制 resize
+  setTimeout(()=>chart.resize(), 0);
+  requestAnimationFrame(()=>chart.resize());
   // 周期
   document.getElementById("cyc-rows").innerHTML=(d.track.cycles||[]).map(x=>`
     <tr><td class="l">${x.name}</td>
