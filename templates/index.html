@@ -12,9 +12,14 @@
   <h1>📈 quantinvest</h1>
   <nav class="topnav">
     <a href="/" class="active">K线浏览</a>
+    <a href="/watchlist">自选股</a>
     <a href="/screen">选股</a>
     <a href="/pattern">杯柄形态</a>
     <a href="/rdagent">RD-Agent因子</a>
+    <a href="/backtest">回测对比</a>
+    <a href="/strategy">单票策略</a>
+    <a href="/advisor">策略顾问</a>
+    <a href="/intraday">日内择时</a>
     <a href="/tradingagents">TradingAgents分析</a>
   </nav>
   <div class="search-wrap">
@@ -39,6 +44,19 @@
         <option value="1250">5 年</option>
       </select>
     </label>
+    <span class="ctrl-group ind-toggles">指标:
+      <label><input type="checkbox" id="ind-boll"/> 布林带</label>
+      <label><input type="checkbox" id="ind-macd"/> MACD</label>
+      <label><input type="checkbox" id="ind-rsi"/> RSI</label>
+      <label><input type="checkbox" id="ind-kdj"/> KDJ</label>
+    </span>
+    <button id="star" class="ctrl-group" title="加入/移出自选股" disabled style="cursor:pointer;">☆ 自选</button>
+    <span class="ctrl-group factor-overlay">因子:
+      <select id="f-batch" style="max-width:150px;"></select>
+      <select id="f-name" style="max-width:130px;"></select>
+      <button id="f-add" style="cursor:pointer;">叠加</button>
+      <button id="f-clear" style="cursor:pointer;display:none;">✕</button>
+    </span>
   </div>
   <div id="meta" class="meta"></div>
   <div id="freshness" class="freshness hidden"></div>
@@ -70,6 +88,8 @@ if (window.ResizeObserver) {
 let currentCode = "", currentName = "";
 let currentData = null;        // 保存当前 chart 数据
 let currentIndex = -1;         // 当前高亮的 K 线索引
+let factorSeries = null;       // 因子叠加: 对齐到 currentData.dates 的值数组
+let factorName = "";           // 当前叠加的因子名
 $adjust.addEventListener("change", () => { if (currentCode) loadKline(currentCode, currentName); });
 $days.addEventListener("change", () => { if (currentCode) loadKline(currentCode, currentName); });
 
@@ -117,8 +137,8 @@ document.addEventListener("keydown", (e) => {
 chart.getZr().on("click", (e) => {
   if (!currentData) return;
   const n = currentData.dates.length;
-  // 先尝试两个 grid 的精确 convert
-  for (const xi of [0, 1]) {
+  // 先尝试各 grid 的精确 convert (主图+成交量+指标面板)
+  for (const xi of [0, 1, 2, 3, 4]) {
     const p = chart.convertFromPixel({ xAxisIndex: xi }, [e.offsetX, e.offsetY]);
     if (Array.isArray(p) && !isNaN(p[0]) && p[0] >= 0 && p[0] < n) {
       setIndex(Math.round(p[0]));
@@ -257,6 +277,9 @@ function renderSuggest(hits) {
 
 async function loadKline(code, name) {
   currentCode = code; currentName = name;
+  // 换股票时清除上一只的因子叠加
+  factorSeries = null; factorName = "";
+  document.getElementById("f-clear").style.display = "none";
   const adjust = $adjust.value;
   const days = $days.value;
   $status.textContent = `加载 ${code} (${adjust}) · 正在检查 tushare 是否有新数据...`;
@@ -272,50 +295,125 @@ async function loadKline(code, name) {
     // 默认定位到最新交易日, 显示其十字线 + tooltip
     setIndex(d.dates.length - 1);
     renderFreshness(d.freshness);
+    updateStar();
     $status.textContent = "完成 · 键盘 ←/→ 切换日期, Home/End 跳首末";
   } catch (e) {
     $status.textContent = "失败: " + e.message;
   }
 }
 
+function getIndState() {
+  return {
+    boll: document.getElementById("ind-boll").checked,
+    macd: document.getElementById("ind-macd").checked,
+    rsi:  document.getElementById("ind-rsi").checked,
+    kdj:  document.getElementById("ind-kdj").checked,
+  };
+}
+
 function drawChart(d) {
+  const upColor = "#ef4444", downColor = "#22c55e";
+  const ind = getIndState();
   // ECharts candlestick expects [open, close, low, high] per row
   const kdata = d.dates.map((_, i) => [d.open[i], d.close[i], d.low[i], d.high[i]]);
-  const upColor = "#ef4444";
-  const downColor = "#22c55e";
+
+  // 下方面板: 成交量(总在) + 选中的指标. 主图为 grid 0
+  const lowerKeys = ["vol"];
+  if (ind.macd) lowerKeys.push("macd");
+  if (ind.rsi)  lowerKeys.push("rsi");
+  if (ind.kdj)  lowerKeys.push("kdj");
+  if (factorSeries) lowerKeys.push("factor");
+
+  // 动态纵向布局 (百分比): 主图权重3, 每个下方面板权重1
+  const topPad = 6, bottomPad = 9, gap = 2.5;
+  const usable = 100 - topPad - bottomPad;
+  const totalW = 3 + lowerKeys.length;
+  const unit = (usable - gap * lowerKeys.length) / totalW;
+  const grids = [{ left: 60, right: 20, top: topPad + "%", height: (unit * 3) + "%" }];
+  const gi = { main: 0 };
+  let y = topPad + unit * 3 + gap;
+  lowerKeys.forEach(k => {
+    grids.push({ left: 60, right: 20, top: y + "%", height: unit + "%" });
+    gi[k] = grids.length - 1;
+    y += unit + gap;
+  });
+  const last = grids.length - 1;
+
+  const xAxis = grids.map((_, idx) => ({
+    type: "category", gridIndex: idx, data: d.dates, scale: true, boundaryGap: false,
+    axisLine: { onZero: false }, axisTick: { show: idx === last },
+    splitLine: { show: false }, axisLabel: { show: idx === last },
+  }));
+  const yAxis = grids.map((_, idx) => idx === 0
+    ? { scale: true, splitArea: { show: true } }
+    : { scale: true, gridIndex: idx, splitNumber: 2, axisLabel: { show: true, fontSize: 10 },
+        axisLine: { show: false }, axisTick: { show: false }, splitLine: { show: false } });
+
+  const legend = ["K线", "MA5", "MA10", "MA20", "MA60"];
+  const series = [
+    { name: "K线", type: "candlestick", xAxisIndex: 0, yAxisIndex: 0, data: kdata,
+      itemStyle: { color: upColor, color0: downColor, borderColor: upColor, borderColor0: downColor } },
+    makeMA("MA5", d.close, 5), makeMA("MA10", d.close, 10),
+    makeMA("MA20", d.close, 20), makeMA("MA60", d.close, 60),
+  ];
+
+  if (ind.boll) {
+    const b = computeBoll(d.close, 20, 2);
+    legend.push("BOLL上", "BOLL中", "BOLL下");
+    series.push(
+      { name: "BOLL上", type: "line", data: b.up, showSymbol: false, smooth: true, lineStyle: { width: 1, color: "#a78bfa", type: "dashed" } },
+      { name: "BOLL中", type: "line", data: b.mid, showSymbol: false, smooth: true, lineStyle: { width: 1, color: "#a78bfa" } },
+      { name: "BOLL下", type: "line", data: b.low, showSymbol: false, smooth: true, lineStyle: { width: 1, color: "#a78bfa", type: "dashed" } },
+    );
+  }
+
+  series.push({ name: "Volume", type: "bar", xAxisIndex: gi.vol, yAxisIndex: gi.vol,
+    data: d.volume.map((v, i) => ({ value: v, itemStyle: { color: d.close[i] >= d.open[i] ? upColor : downColor } })) });
+
+  if (ind.macd) {
+    const m = computeMACD(d.close);
+    legend.push("DIF", "DEA", "MACD");
+    series.push(
+      { name: "MACD", type: "bar", xAxisIndex: gi.macd, yAxisIndex: gi.macd,
+        data: m.macd.map(v => ({ value: v, itemStyle: { color: (v !== "-" && v >= 0) ? upColor : downColor } })) },
+      { name: "DIF", type: "line", xAxisIndex: gi.macd, yAxisIndex: gi.macd, data: m.dif, showSymbol: false, lineStyle: { width: 1, color: "#eab308" } },
+      { name: "DEA", type: "line", xAxisIndex: gi.macd, yAxisIndex: gi.macd, data: m.dea, showSymbol: false, lineStyle: { width: 1, color: "#3b82f6" } },
+    );
+  }
+  if (ind.rsi) {
+    legend.push("RSI14");
+    series.push({ name: "RSI14", type: "line", xAxisIndex: gi.rsi, yAxisIndex: gi.rsi,
+      data: computeRSI(d.close, 14), showSymbol: false, lineStyle: { width: 1, color: "#f59e0b" } });
+  }
+  if (ind.kdj) {
+    const k = computeKDJ(d.high, d.low, d.close, 9);
+    legend.push("K", "D", "J");
+    series.push(
+      { name: "K", type: "line", xAxisIndex: gi.kdj, yAxisIndex: gi.kdj, data: k.k, showSymbol: false, lineStyle: { width: 1, color: "#eab308" } },
+      { name: "D", type: "line", xAxisIndex: gi.kdj, yAxisIndex: gi.kdj, data: k.d, showSymbol: false, lineStyle: { width: 1, color: "#3b82f6" } },
+      { name: "J", type: "line", xAxisIndex: gi.kdj, yAxisIndex: gi.kdj, data: k.j, showSymbol: false, lineStyle: { width: 1, color: "#ec4899" } },
+    );
+  }
+
+  if (factorSeries) {
+    legend.push("因子:" + factorName);
+    series.push({ name: "因子:" + factorName, type: "line", xAxisIndex: gi.factor, yAxisIndex: gi.factor,
+      data: factorSeries, showSymbol: false, connectNulls: true, lineStyle: { width: 1.5, color: "#34d399" } });
+  }
+
+  const allX = grids.map((_, i) => i);
   chart.setOption({
     animation: false,
     tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
-    legend: { data: ["K线", "MA5", "MA10", "MA20", "MA60"], top: 0 },
-    grid: [
-      { left: 60, right: 20, top: 40, height: "60%" },
-      { left: 60, right: 20, top: "75%", height: "18%" },
-    ],
-    xAxis: [
-      { type: "category", data: d.dates, scale: true, boundaryGap: false,
-        axisLine: { onZero: false }, splitLine: { show: false }, axisLabel: { show: false } },
-      { type: "category", gridIndex: 1, data: d.dates, scale: true, boundaryGap: false,
-        axisLine: { onZero: false }, axisTick: { show: false }, splitLine: { show: false } },
-    ],
-    yAxis: [
-      { scale: true, splitArea: { show: true } },
-      { scale: true, gridIndex: 1, splitNumber: 2, axisLabel: { show: false }, axisLine: { show: false },
-        axisTick: { show: false }, splitLine: { show: false } },
-    ],
+    axisPointer: { link: [{ xAxisIndex: "all" }] },
+    legend: { data: legend, top: 0, type: "scroll" },
+    grid: grids,
+    xAxis, yAxis,
     dataZoom: [
-      { type: "inside", xAxisIndex: [0, 1], start: 70, end: 100 },
-      { show: true, xAxisIndex: [0, 1], type: "slider", top: "95%", start: 70, end: 100 },
+      { type: "inside", xAxisIndex: allX, start: 70, end: 100 },
+      { show: true, xAxisIndex: allX, type: "slider", bottom: 10, start: 70, end: 100 },
     ],
-    series: [
-      { name: "K线", type: "candlestick", data: kdata,
-        itemStyle: { color: upColor, color0: downColor, borderColor: upColor, borderColor0: downColor } },
-      makeMA("MA5", d.close, 5),
-      makeMA("MA10", d.close, 10),
-      makeMA("MA20", d.close, 20),
-      makeMA("MA60", d.close, 60),
-      { name: "Volume", type: "bar", xAxisIndex: 1, yAxisIndex: 1,
-        data: d.volume.map((v, i) => ({ value: v, itemStyle: { color: d.close[i] >= d.open[i] ? upColor : downColor } })) },
-    ],
+    series,
   }, true);
 }
 
@@ -352,6 +450,175 @@ function makeMA(name, closes, win) {
   });
   return { name, type: "line", data, smooth: true, showSymbol: false, lineStyle: { width: 1 } };
 }
+
+// ===== 技术指标 (客户端计算, 数据来自 /api/kline 的 OHLC) =====
+function emaArr(arr, n) {
+  const k = 2 / (n + 1); const out = []; let prev = arr.length ? arr[0] : 0;
+  for (let i = 0; i < arr.length; i++) { prev = i === 0 ? arr[0] : arr[i] * k + prev * (1 - k); out.push(prev); }
+  return out;
+}
+function computeMACD(close) {
+  const e12 = emaArr(close, 12), e26 = emaArr(close, 26);
+  const dif = close.map((_, i) => +(e12[i] - e26[i]).toFixed(4));
+  const dea = emaArr(dif, 9).map(v => +v.toFixed(4));
+  const macd = dif.map((_, i) => +((dif[i] - dea[i]) * 2).toFixed(4));
+  return { dif, dea, macd };
+}
+function computeRSI(close, n) {
+  const out = new Array(close.length).fill("-");
+  if (close.length <= n) return out;
+  let avgG = 0, avgL = 0;
+  for (let i = 1; i <= n; i++) { const ch = close[i] - close[i - 1]; avgG += ch > 0 ? ch : 0; avgL += ch < 0 ? -ch : 0; }
+  avgG /= n; avgL /= n;
+  out[n] = avgL === 0 ? 100 : +(100 - 100 / (1 + avgG / avgL)).toFixed(2);
+  for (let i = n + 1; i < close.length; i++) {
+    const ch = close[i] - close[i - 1];
+    avgG = (avgG * (n - 1) + (ch > 0 ? ch : 0)) / n;
+    avgL = (avgL * (n - 1) + (ch < 0 ? -ch : 0)) / n;
+    out[i] = avgL === 0 ? 100 : +(100 - 100 / (1 + avgG / avgL)).toFixed(2);
+  }
+  return out;
+}
+function computeKDJ(high, low, close, n) {
+  const K = new Array(close.length).fill("-"), D = new Array(close.length).fill("-"), J = new Array(close.length).fill("-");
+  let k = 50, d = 50;
+  for (let i = 0; i < close.length; i++) {
+    if (i < n - 1) continue;
+    let hh = -Infinity, ll = Infinity;
+    for (let j = i - n + 1; j <= i; j++) { if (high[j] > hh) hh = high[j]; if (low[j] < ll) ll = low[j]; }
+    const rsv = hh === ll ? 50 : (close[i] - ll) / (hh - ll) * 100;
+    k = 2 / 3 * k + 1 / 3 * rsv; d = 2 / 3 * d + 1 / 3 * k;
+    K[i] = +k.toFixed(2); D[i] = +d.toFixed(2); J[i] = +(3 * k - 2 * d).toFixed(2);
+  }
+  return { k: K, d: D, j: J };
+}
+function computeBoll(close, n, mult) {
+  const up = new Array(close.length).fill("-"), mid = new Array(close.length).fill("-"), low = new Array(close.length).fill("-");
+  for (let i = n - 1; i < close.length; i++) {
+    let s = 0; for (let j = i - n + 1; j <= i; j++) s += close[j];
+    const m = s / n;
+    let v = 0; for (let j = i - n + 1; j <= i; j++) v += (close[j] - m) ** 2;
+    const sd = Math.sqrt(v / n);
+    mid[i] = +m.toFixed(3); up[i] = +(m + mult * sd).toFixed(3); low[i] = +(m - mult * sd).toFixed(3);
+  }
+  return { up, mid, low };
+}
+
+// ===== 自选股 ⭐ =====
+const $star = document.getElementById("star");
+let watchSet = new Set();
+async function loadWatchSet() {
+  try { const j = await (await fetch("/api/watchlist")).json(); watchSet = new Set((j.items || []).map(x => x.code)); }
+  catch (e) { watchSet = new Set(); }
+  updateStar();
+}
+function updateStar() {
+  if (!currentCode) { $star.disabled = true; $star.textContent = "☆ 自选"; return; }
+  $star.disabled = false;
+  const on = watchSet.has(currentCode);
+  $star.textContent = on ? "★ 已自选" : "☆ 自选";
+  $star.style.color = on ? "#facc15" : "";
+}
+$star.addEventListener("click", async () => {
+  if (!currentCode) return;
+  const on = watchSet.has(currentCode);
+  const url = on ? "/api/watchlist/remove" : "/api/watchlist/add";
+  try {
+    await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code: currentCode }) });
+    if (on) watchSet.delete(currentCode); else watchSet.add(currentCode);
+    updateStar();
+  } catch (e) { $status.textContent = "自选操作失败: " + e.message; }
+});
+loadWatchSet();
+
+// ===== 因子叠加 K 线 (Phase 4) =====
+const $fBatch = document.getElementById("f-batch");
+const $fName = document.getElementById("f-name");
+const $fAdd = document.getElementById("f-add");
+const $fClear = document.getElementById("f-clear");
+let batchesData = [];
+let factorPollTimer = null;
+
+async function loadBatches() {
+  try {
+    const j = await (await fetch("/api/rdagent/batches")).json();
+    batchesData = j.batches || [];
+  } catch (e) { batchesData = []; }
+  if (!batchesData.length) {
+    $fBatch.innerHTML = '<option value="">无批次</option>'; $fName.innerHTML = ""; $fAdd.disabled = true; return;
+  }
+  $fBatch.innerHTML = batchesData.map((b, i) => `<option value="${i}">${b.label} (${b.n_factors||(b.factors||[]).length})</option>`).join("");
+  fillFactors();
+}
+function fillFactors() {
+  const b = batchesData[+$fBatch.value] || batchesData[0];
+  const fs = (b && b.factors) || [];
+  $fName.innerHTML = fs.map(f => `<option value="${f}">${f}</option>`).join("");
+}
+$fBatch.addEventListener("change", fillFactors);
+
+$fAdd.addEventListener("click", async () => {
+  if (!currentCode) { $status.textContent = "请先打开一只股票"; return; }
+  const b = batchesData[+$fBatch.value]; if (!b) return;
+  const factor = $fName.value; if (!factor) return;
+  $fAdd.disabled = true;
+  $status.textContent = `请求因子 ${factor} ... (PC 计算, 挖掘因子秒级 / Alpha158 首次约 30s)`;
+  try {
+    await fetch(`/api/factor/request?code=${currentCode}&factor=${encodeURIComponent(factor)}&batch=${encodeURIComponent(b.label)}`);
+    if (factorPollTimer) clearInterval(factorPollTimer);
+    let waited = 0;
+    factorPollTimer = setInterval(async () => {
+      waited += 2;
+      let j;
+      try { j = await (await fetch("/api/factor/values")).json(); } catch (e) { return; }
+      const r = j.result;
+      // 等到结果且匹配当前请求
+      if (!j.pending && r && r.code === currentCode && r.factor === factor) {
+        clearInterval(factorPollTimer); factorPollTimer = null; $fAdd.disabled = false;
+        if (r.error || !r.dates || !r.dates.length) { $status.textContent = `因子获取失败: ${r.error || "无数据"}`; return; }
+        applyFactor(r);
+      } else if (waited > 90) {
+        clearInterval(factorPollTimer); factorPollTimer = null; $fAdd.disabled = false;
+        $status.textContent = "因子请求超时 (PC 未在线?)";
+      } else {
+        $status.textContent = `等待 PC 计算因子 ${factor}... ${waited}s` + (j.status && j.status.msg ? ` (${j.status.msg})` : "");
+      }
+    }, 2000);
+  } catch (e) { $fAdd.disabled = false; $status.textContent = "因子请求失败: " + e.message; }
+});
+
+function applyFactor(r) {
+  if (!currentData) return;
+  const m = new Map();
+  for (let i = 0; i < r.dates.length; i++) m.set(r.dates[i], r.values[i]);
+  factorSeries = currentData.dates.map(d => (m.has(d) && m.get(d) !== null) ? m.get(d) : "-");
+  factorName = `${r.factor}${r.source === "mined" ? "·挖掘" : ""}`;
+  $fClear.style.display = "";
+  drawChart(currentData);
+  setIndex(currentIndex >= 0 ? currentIndex : currentData.dates.length - 1);
+  $status.textContent = `已叠加因子 ${r.factor} (${r.dates.length} 点, ${r.source})`;
+}
+$fClear.addEventListener("click", () => {
+  factorSeries = null; factorName = ""; $fClear.style.display = "none";
+  if (currentData) { drawChart(currentData); setIndex(currentIndex >= 0 ? currentIndex : currentData.dates.length - 1); }
+});
+loadBatches();
+
+// URL ?code=sh600519 直接打开该股 K 线
+(function () {
+  const code = new URLSearchParams(location.search).get("code");
+  if (code) { $q.value = code; loadKline(code.trim().toLowerCase(), ""); }
+})();
+
+// 指标勾选: 持久化 + 切换重绘
+["ind-boll", "ind-macd", "ind-rsi", "ind-kdj"].forEach(id => {
+  const el = document.getElementById(id);
+  if (localStorage.getItem(id) === "1") el.checked = true;
+  el.addEventListener("change", () => {
+    localStorage.setItem(id, el.checked ? "1" : "0");
+    if (currentData) { drawChart(currentData); setIndex(currentIndex >= 0 ? currentIndex : currentData.dates.length - 1); }
+  });
+});
 </script>
 </body>
 </html>

@@ -22,6 +22,7 @@ $statusFile = Join-Path $shared "predict_status.json"
 $rdReqFile    = Join-Path $shared "rdagent_request.json"
 $rdStatusFile = Join-Path $shared "rdagent_status.json"
 $taReqFile    = Join-Path $shared "ta_request.json"     # TradingAgents 分析请求
+$factorReqFile = Join-Path $shared "factor_request.json" # 因子值抽取请求 (Phase 4 K线叠加)
 
 $env:QLIB_DATA_PATH      = $qlibData
 $env:PARQUET_DIR         = Join-Path $shared "tushare_daily"
@@ -39,6 +40,19 @@ function Write-RdStatus($state, $msg) {
   ($obj | ConvertTo-Json -Compress) | Out-File -FilePath $rdStatusFile -Encoding utf8
 }
 
+# 持锁进程是否仍是“活着的 watcher”。只看 PID 在不在会被 PID 回收坑 (旧 watcher 死后,
+# 系统把同一 PID 分给别的程序如 lenovo_tool, 误判“锁还有效” -> 谁也抢不到锁, 全部死锁)。
+# 所以额外要求: 该 PID 确实是命令行里带 watch_predict 的 powershell/pwsh 进程。
+function Test-WatcherAlive([int]$procId) {
+  if ($procId -le 0) { return $false }
+  try {
+    $p = Get-CimInstance Win32_Process -Filter "ProcessId=$procId" -ErrorAction Stop
+    if (-not $p) { return $false }
+    if ($p.Name -ne 'powershell.exe' -and $p.Name -ne 'pwsh.exe') { return $false }
+    return ([string]$p.CommandLine -match 'watch_predict')
+  } catch { return $false }
+}
+
 if (-not (Test-Path $shared)) {
   Write-Host "[watch] shared dir not reachable: $shared" -ForegroundColor Red
   Write-Host "        check the NAS is online and the UNC path is correct (or set `$env:SHARED_DIR)."
@@ -52,8 +66,26 @@ if (-not (Test-Path $env:STOCK_META_DB)) {
 Write-Host "[watch] watching $reqFile  (every 15s, Ctrl+C to stop)" -ForegroundColor Cyan
 Write-Status "idle" "waiting"
 Set-Location $proj
+$lockFile = Join-Path $shared "watcher.lock"
 
 while ($true) {
+  # 全局锁: 多个 watcher 实例时只有持锁者处理请求, 避免重复处理同一请求/打架; 持锁进程死了则抢占
+  $haveLock = $false
+  try {
+    $fs = [System.IO.File]::Open($lockFile, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+    $bb = [System.Text.Encoding]::ASCII.GetBytes("$PID"); $fs.Write($bb, 0, $bb.Length); $fs.Close(); $haveLock = $true
+  } catch {
+    try {
+      $owner = 0; [void][int]::TryParse(((Get-Content $lockFile -Raw -ErrorAction Stop) -replace '\s', ''), [ref]$owner)
+      if ($owner -eq $PID) { $haveLock = $true }
+      elseif (-not (Test-WatcherAlive $owner)) {
+        # 持锁者不是活着的 watcher (已死 / 或 PID 被别的程序回收) -> 抢占
+        Set-Content -Path $lockFile -Value "$PID" -Encoding ascii -Force; $haveLock = $true
+      }
+    } catch {}
+  }
+  if (-not $haveLock) { Start-Sleep -Seconds 15; continue }
+  try {
   if (Test-Path $reqFile) {
     $retrain = $false; $update = $false
     try { $r = (Get-Content $reqFile -Raw | ConvertFrom-Json); $retrain = [bool]$r.retrain; $update = [bool]$r.update } catch {}
@@ -85,6 +117,8 @@ while ($true) {
     # request flags: mine(因子挖掘) / retrain / batch(因子批次标签) / loop_n(挖掘轮数)
     $rdRetrain = $false   # web 默认快速预测(复用缓存); 缓存不存在时 predict_next_day 自动回退重训
     $rdBatch = ""; $rdMine = $false; $rdLoopN = 5; $rdModelEval = $false; $rdModel = "lgb"; $rdRunAll = $false
+    $rdStrat = $false; $rdHold = 5; $rdTopN = 1; $rdCost = 0.002   # 单票·周频策略回测
+    $rdRegimeAdv = $false   # 策略顾问: regime择时 当前推荐+战绩
     try {
       $rr = (Get-Content $rdReqFile -Raw | ConvertFrom-Json)
       if ($null -ne $rr.retrain)    { $rdRetrain = [bool]$rr.retrain }
@@ -94,7 +128,51 @@ while ($true) {
       if ($null -ne $rr.model_eval) { $rdModelEval = [bool]$rr.model_eval }
       if ($null -ne $rr.model)      { $rdModel = [string]$rr.model }
       if ($null -ne $rr.run_all)    { $rdRunAll = [bool]$rr.run_all }
+      if ($null -ne $rr.strategy_bt){ $rdStrat = [bool]$rr.strategy_bt }
+      if ($null -ne $rr.hold_days)  { $rdHold = [int]$rr.hold_days }
+      if ($null -ne $rr.topn)       { $rdTopN = [int]$rr.topn }
+      if ($null -ne $rr.rt_cost)    { $rdCost = [double]$rr.rt_cost }
+      if ($null -ne $rr.regime_adv) { $rdRegimeAdv = [bool]$rr.regime_adv }
     } catch {}
+
+    # ===== 策略顾问: regime择时 当前推荐篮子+战绩, 拉最新数据重算, 写 regime_advisor.json =====
+    if ($rdRegimeAdv) {
+      Write-Host "[watch] 策略顾问: 拉最新数据 + 重算 regime/篮子..." -ForegroundColor Cyan
+      Write-RdStatus "running" "策略顾问: 同步行情 + 拉最新成分/估值 + 重算当前 regime (~1分钟)"
+      robocopy "$qlibData" "C:\qlib_data\cn_data" /MIR /MT:8 /R:1 /W:2 /XF csi300.txt csi300.txt.bak /NFL /NDL /NJH /NP | Out-Null
+      if (-not $env:TUSHARE_TOKEN -and (Test-Path "$proj\data\.tushare_token")) { $env:TUSHARE_TOKEN = (Get-Content "$proj\data\.tushare_token" -Raw).Trim() }
+      & "D:\anaconda3\python.exe" "C:\rdagent\regime_advisor.py"
+      $advExit = $LASTEXITCODE
+      if ($advExit -eq 0 -and (Test-Path "C:\rdagent\regime_advisor.json")) {
+        Copy-Item "C:\rdagent\regime_advisor.json" (Join-Path $shared "regime_advisor.json") -Force
+        if (Test-Path "C:\rdagent\regime_advisor_history.json") { Copy-Item "C:\rdagent\regime_advisor_history.json" (Join-Path $shared "regime_advisor_history.json") -Force }
+        Write-RdStatus "done" "策略顾问已更新: 见 策略顾问 页"
+        Write-Host "[watch] 策略顾问完成" -ForegroundColor Green
+      } else {
+        Write-RdStatus "error" "策略顾问失败 exit $advExit (检查 regime_advisor.py)"
+        Write-Host "[watch] 策略顾问失败 exit $advExit" -ForegroundColor Red
+      }
+      Remove-Item $rdReqFile -Force -ErrorAction SilentlyContinue
+      continue
+    }
+
+    # ===== 单票·周频策略回测: top-N 单票, 每 HOLD 天换仓, 结果写 strategy_result.json =====
+    if ($rdStrat) {
+      Write-Host "[watch] 策略回测: $rdModel batch='$rdBatch' hold=$rdHold topN=$rdTopN..." -ForegroundColor Cyan
+      Write-RdStatus "running" "策略回测: $rdModel [batch=$rdBatch] top$rdTopN/$rdHold日换仓, 训练+模拟中 (~几分钟)"
+      wsl -e bash -lc "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent && cd /mnt/c/rdagent && RDAGENT_MODEL='$rdModel' RDAGENT_FACTOR_BATCH='$rdBatch' HOLD_DAYS=$rdHold TOPN=$rdTopN RT_COST=$rdCost python backtest_top1_weekly.py"
+      $stExit = $LASTEXITCODE
+      if ($stExit -eq 0 -and (Test-Path "C:\rdagent\strategy_result.json")) {
+        Copy-Item "C:\rdagent\strategy_result.json" (Join-Path $shared "strategy_result.json") -Force
+        Write-RdStatus "done" "策略回测完成: $rdModel top$rdTopN/$rdHold日, 见 单票策略 页"
+        Write-Host "[watch] 策略回测完成" -ForegroundColor Green
+      } else {
+        Write-RdStatus "error" "策略回测失败 exit $stExit (检查 backtest_top1_weekly.py)"
+        Write-Host "[watch] 策略回测失败 exit $stExit" -ForegroundColor Red
+      }
+      Remove-Item $rdReqFile -Force -ErrorAction SilentlyContinue
+      continue
+    }
 
     # ===== 一键全跑: 所有模型 训练+回测 + 各出买入清单 (供对比). 同步一次数据后循环。 =====
     if ($rdRunAll) {
@@ -105,13 +183,21 @@ while ($true) {
       if (-not $env:TUSHARE_TOKEN -and (Test-Path "$proj\data\.tushare_token")) { $env:TUSHARE_TOKEN = (Get-Content "$proj\data\.tushare_token" -Raw).Trim() }
       Write-RdStatus "running" "一键全跑: 重建 csi300 universe"
       Push-Location "C:\rdagent"; python build_csi300.py; Pop-Location
-      $n = $models.Count; $i = 0
+      $n = $models.Count; $i = 0; $failed = @()
       foreach ($m in $models) {
         $i++
         Write-RdStatus "running" "一键全跑 ($i/$n): $m 训练+回测"
         wsl -e bash -lc "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent && cd /mnt/c/rdagent && RDAGENT_MODEL='$m' RDAGENT_FACTOR_BATCH='$rdBatch' python run_model.py"
+        # 训练+回测失败 -> 记录并跳过该模型 (不要闷头继续, 否则最后假报 done). 见 run_model.py 回测边界等。
+        if ($LASTEXITCODE -ne 0) {
+          $failed += $m
+          Write-Host "[watch] run all: $m 训练+回测失败 exit $LASTEXITCODE, 跳过该模型" -ForegroundColor Red
+          Write-RdStatus "running" "一键全跑 ($i/$n): $m 训练+回测失败(exit $LASTEXITCODE), 跳过"
+          continue
+        }
         if (Test-Path "C:\rdagent\model_results.json") { Copy-Item "C:\rdagent\model_results.json" (Join-Path $shared "model_results.json") -Force }
-      if (Test-Path "C:\rdagent\model_runs_history.json") { Copy-Item "C:\rdagent\model_runs_history.json" (Join-Path $shared "model_runs_history.json") -Force }
+        if (Test-Path "C:\rdagent\model_runs_history.json") { Copy-Item "C:\rdagent\model_runs_history.json" (Join-Path $shared "model_runs_history.json") -Force }
+        if (Test-Path "C:\rdagent\model_curves.json") { Copy-Item "C:\rdagent\model_curves.json" (Join-Path $shared "model_curves.json") -Force }
         Write-RdStatus "running" "一键全跑 ($i/$n): $m 预测买入清单"
         wsl -e bash -lc "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent && cd /mnt/c/rdagent && RDAGENT_RETRAIN=1 RDAGENT_MODEL='$m' RDAGENT_FACTOR_BATCH='$rdBatch' python predict_next_day.py"
         if ($LASTEXITCODE -eq 0) {
@@ -121,10 +207,22 @@ while ($true) {
           python export_rdagent.py
           Remove-Item Env:\RDAGENT_TAG_BUYLIST -ErrorAction SilentlyContinue
           Pop-Location
+        } else {
+          Write-Host "[watch] run all: $m 预测买入清单失败 exit $LASTEXITCODE (回测结果已出, 仅清单缺)" -ForegroundColor Yellow
         }
       }
-      Write-RdStatus "done" "一键全跑完成: $n 个模型已回测+出清单, 点 📊 对比"
-      Write-Host "[watch] run all done" -ForegroundColor Green
+      # 收尾按成败分级: 全成功=done; 部分成功=done但点明失败项; 全失败=error (不再假报完成)
+      if ($failed.Count -eq 0) {
+        Write-RdStatus "done" "一键全跑完成: $n 个模型已回测+出清单, 点 📊 对比"
+        Write-Host "[watch] run all done" -ForegroundColor Green
+      } elseif ($failed.Count -lt $n) {
+        $okN = $n - $failed.Count
+        Write-RdStatus "done" "一键全跑部分完成: $okN/$n 成功, 失败=$($failed -join ',') (见 watcher 窗口日志)"
+        Write-Host "[watch] run all partial: failed=$($failed -join ',')" -ForegroundColor Yellow
+      } else {
+        Write-RdStatus "error" "一键全跑失败: 全部 $n 个模型训练+回测失败, 检查 run_model.py / 数据 (无结果产出)"
+        Write-Host "[watch] run all FAILED: 全部模型失败" -ForegroundColor Red
+      }
       Remove-Item $rdReqFile -Force -ErrorAction SilentlyContinue
       continue
     }
@@ -137,6 +235,7 @@ while ($true) {
       $meExit = $LASTEXITCODE
       if (Test-Path "C:\rdagent\model_results.json") { Copy-Item "C:\rdagent\model_results.json" (Join-Path $shared "model_results.json") -Force }
       if (Test-Path "C:\rdagent\model_runs_history.json") { Copy-Item "C:\rdagent\model_runs_history.json" (Join-Path $shared "model_runs_history.json") -Force }
+      if (Test-Path "C:\rdagent\model_curves.json") { Copy-Item "C:\rdagent\model_curves.json" (Join-Path $shared "model_curves.json") -Force }
       if ($meExit -eq 0) { Write-RdStatus "done" "model eval 完成: $rdModel [batch=$rdBatch]"; Write-Host "[watch] model eval done" -ForegroundColor Green }
       else { Write-RdStatus "error" "model eval $rdModel 失败 exit $meExit" }
       Remove-Item $rdReqFile -Force -ErrorAction SilentlyContinue
@@ -190,10 +289,18 @@ while ($true) {
       $faExit = $LASTEXITCODE
       Push-Location "C:\rdagent"; python export_rdagent.py; Pop-Location   # 刷新批次索引给网页下拉
       if ($faExit -eq 0) {
-        $doneMsg = if ($mineExit -eq 0) { "mine 完成: 新批次已生成, 去网页下拉选它预测对比" } `
-                   else { "mine 部分完成(fin_factor exit $mineExit, 已从完成的 loop 抢救): 新批次已生成" }
+        # 自动给新批次跑一次 lgb 回测 -> 生成净值曲线 (回测对比页可直接看, 挖一批=自动一条曲线)
+        $newBatch = (Get-ChildItem "C:\rdagent\final\batches\*.json" | Sort-Object LastWriteTime -Descending | Select-Object -First 1).BaseName
+        if ($newBatch) {
+          Write-RdStatus "running" "mine: 给新批次 $newBatch 跑 lgb 回测曲线 (~几分钟)"
+          wsl -e bash -lc "source ~/miniconda3/etc/profile.d/conda.sh && conda activate rdagent && cd /mnt/c/rdagent && SEEDS=0 RDAGENT_MODEL=lgb RDAGENT_FACTOR_BATCH='$newBatch' python run_model.py"
+          if (Test-Path "C:\rdagent\model_curves.json")  { Copy-Item "C:\rdagent\model_curves.json"  (Join-Path $shared "model_curves.json")  -Force }
+          if (Test-Path "C:\rdagent\model_results.json") { Copy-Item "C:\rdagent\model_results.json" (Join-Path $shared "model_results.json") -Force }
+        }
+        $doneMsg = if ($mineExit -eq 0) { "mine 完成: 新批次 $newBatch 已生成 + lgb 回测曲线已出, 去回测对比页看" } `
+                   else { "mine 部分完成(fin_factor exit $mineExit, 已抢救): 新批次 $newBatch + 回测曲线已出" }
         Write-RdStatus "done" $doneMsg
-        Write-Host "[watch] mine done (exit=$mineExit)" -ForegroundColor Green
+        Write-Host "[watch] mine done (exit=$mineExit), 新批次=$newBatch 回测曲线已出" -ForegroundColor Green
       } else {
         Write-RdStatus "error" "factor_analysis exit $faExit"
       }
@@ -257,6 +364,19 @@ while ($true) {
     Pop-Location
     Remove-Item $taReqFile -Force -ErrorAction SilentlyContinue
     Write-Host "[watch] TradingAgents 分析结束" -ForegroundColor Green
+  }
+
+  # ===== 因子值抽取 (单股某因子时间序列, 供网页叠加到 K 线; 挖掘因子读 parquet, Alpha158 用 qlib 现算) =====
+  if (Test-Path $factorReqFile) {
+    Write-Host "[watch] 因子抽取请求..." -ForegroundColor Cyan
+    $env:SHARED_DIR = $shared
+    & "D:\anaconda3\python.exe" "C:\rdagent\extract_factor.py"
+    Remove-Item $factorReqFile -Force -ErrorAction SilentlyContinue
+    Write-Host "[watch] 因子抽取结束" -ForegroundColor Green
+  }
+  } finally {
+    # 释放锁 (仅当自己持有时才删)
+    try { if (((Get-Content $lockFile -Raw -ErrorAction SilentlyContinue) -replace '\s', '') -eq "$PID") { Remove-Item $lockFile -Force -ErrorAction SilentlyContinue } } catch {}
   }
   Start-Sleep -Seconds 15
 }

@@ -11,6 +11,7 @@ data/predictions.json
 data/factors.json
 data/.tushare_token
 *.log
+log/
 mlruns/
 _tmp*/
 _ptest*

@@ -20,9 +20,14 @@
   <h1>🕵️ quantinvest</h1>
   <nav class="topnav">
     <a href="/">K线浏览</a>
+    <a href="/watchlist">自选股</a>
     <a href="/screen">选股</a>
     <a href="/pattern">杯柄形态</a>
     <a href="/rdagent">RD-Agent因子</a>
+    <a href="/backtest">回测对比</a>
+    <a href="/strategy">单票策略</a>
+    <a href="/advisor">策略顾问</a>
+    <a href="/intraday">日内择时</a>
     <a href="/tradingagents" class="active">TradingAgents分析</a>
   </nav>
   <div class="meta" id="meta">对买入清单里的股票做多智能体深度分析(市场/新闻/基本面 + 多空辩论 → 决策) · 仅研究参考</div>
@@ -32,6 +37,9 @@
   <aside class="screen-side">
     <div class="screen-criteria">
       <h3>🕵️ 选股分析</h3>
+      <label style="display:block;font-size:12px;color:#cbd5e1;margin:4px 0;">清单来源:
+        <select id="ta-src" style="width:100%;"></select>
+      </label>
       <div class="c-row" id="src-info" style="font-size:12px;color:#94a3b8;">加载买入清单中...</div>
       <div style="margin:6px 0;">
         <button id="btn-all" style="font-size:11px;">全选</button>
@@ -55,17 +63,31 @@ const $pick = document.getElementById("pick");
 const $btnAnalyze = document.getElementById("btn-analyze");
 const $taStat = document.getElementById("ta-stat");
 const $results = document.getElementById("ta-results");
-let buylist = [], asOf = "", pollTimer = null;
+const $taSrc = document.getElementById("ta-src");
+const MODEL_LABEL = {lgb:"LGB",xgb:"XGB",catboost:"CatBoost",ols:"OLS",ridge:"Ridge",lasso:"Lasso"};
+let buylist = [], asOf = "", pollTimer = null, buylistsIdx = [];
+$taSrc.addEventListener("change", loadBuylist);
+
+async function loadSources() {
+  try { const j = await (await fetch("/api/rdagent/buylists")).json(); buylistsIdx = j.buylists || []; }
+  catch (e) { buylistsIdx = []; }
+  $taSrc.innerHTML = '<option value="">默认 (最新预测)</option>' +
+    buylistsIdx.map(x => `<option value="${x.tag}">${MODEL_LABEL[x.model]||x.model} [${x.batch}] (${x.n_hits}只)</option>`).join("");
+}
 
 document.getElementById("btn-all").addEventListener("click", () => { $pick.querySelectorAll("input").forEach(c=>c.checked=true); });
 document.getElementById("btn-none").addEventListener("click", () => { $pick.querySelectorAll("input").forEach(c=>c.checked=false); });
 $btnAnalyze.addEventListener("click", analyze);
 
 async function loadBuylist() {
+  const src = $taSrc ? $taSrc.value : "";
   try {
-    const j = await (await fetch("/api/rdagent")).json();
+    let j;
+    if (!src) j = await (await fetch("/api/rdagent")).json();
+    else j = await (await fetch(`/api/rdagent/buylist?tag=${encodeURIComponent(src)}`)).json();
     buylist = j.hits || []; asOf = j.as_of || "";
-    $srcInfo.innerHTML = `买入清单(${buylist.length} 只) · 基于 <b>${asOf||"?"}</b> · 勾选要深度分析的股票`;
+    const srcName = src ? `${MODEL_LABEL[j.model]||j.model} [${j.batch}]` : "最新预测";
+    $srcInfo.innerHTML = `来源 <b>${srcName}</b> · ${buylist.length} 只 · 基于 <b>${asOf||"?"}</b> · 勾选要分析的股票`;
     $pick.innerHTML = buylist.map(h =>
       `<label><input type="checkbox" value="${h.ts_code||h.code}" data-name="${h.name||''}"/> ${h.code} ${h.name||''}</label>`).join("");
   } catch (e) { $srcInfo.innerHTML = `<span class="warn">买入清单加载失败: ${e.message}</span>`; }
@@ -112,7 +134,7 @@ function decColor(d) {
 }
 function sec(title, text) {
   if (!text) return "";
-  return `<details class="ta-sec"><summary>${title}</summary><div class="body">${(text+"").replace(/</g,"&lt;")}</div></details>`;
+  return `<details class="ta-sec" open><summary>${title}</summary><div class="body">${(text+"").replace(/</g,"&lt;")}</div></details>`;
 }
 function renderResults(rows) {
   if (!rows.length) { $results.innerHTML = `<div style="color:#64748b;padding:10px;">左侧勾选股票 → 点"深度分析",结果会显示在这里。</div>`; return; }
@@ -136,7 +158,7 @@ function renderResults(rows) {
   }).join("");
 }
 
-loadBuylist().then(loadResults);
+loadSources().then(loadBuylist).then(loadResults);
 </script>
 </body>
 </html>

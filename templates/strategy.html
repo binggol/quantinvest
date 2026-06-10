@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>quantinvest · 单票策略</title>
+<link rel="stylesheet" href="/static/style.css"/>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+.st-wrap { padding:10px; }
+.st-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+.st-bar label { font-size:12px; color:#94a3b8; }
+.st-bar select, .st-bar input { font-size:12px; background:#0f172a; color:#e2e8f0; border:1px solid #1e293b; border-radius:4px; padding:3px 6px; }
+.st-bar input[type=number] { width:64px; }
+.st-bar button { font-size:13px; padding:5px 14px; }
+#st-status { color:#94a3b8; font-size:12px; }
+.warn { background:#1f1604; border:1px solid #92400e; color:#fcd34d; font-size:12px; padding:8px 12px; border-radius:6px; margin-bottom:10px; line-height:1.5; }
+#st-chart { width:100%; height:420px; margin:10px 0; }
+table.st { border-collapse:collapse; font-size:12px; }
+table.st th, table.st td { padding:5px 10px; border-bottom:1px solid #1e293b; text-align:right; }
+table.st th { color:#94a3b8; background:#0f172a; }
+table.st td.l, table.st th.l { text-align:left; }
+.summary { display:flex; gap:18px; flex-wrap:wrap; align-items:flex-start; }
+.summary table { flex:none; }
+.kpi { font-size:12px; color:#cbd5e1; }
+.up { color:#ef4444; } .down { color:#22c55e; }
+.wk-wrap { max-height:360px; overflow:auto; margin-top:10px; }
+table.wk { width:100%; border-collapse:collapse; font-size:12px; }
+table.wk th, table.wk td { padding:4px 8px; border-bottom:1px solid #1e293b; text-align:right; }
+table.wk th { color:#94a3b8; background:#0f172a; position:sticky; top:0; }
+table.wk td.l, table.wk th.l { text-align:left; }
+.muted { color:#64748b; }
+</style>
+</head>
+<body>
+<header class="screen-header">
+  <h1>📈 quantinvest</h1>
+  <nav class="topnav">
+    <a href="/">K线浏览</a>
+    <a href="/watchlist">自选股</a>
+    <a href="/screen">选股</a>
+    <a href="/pattern">杯柄形态</a>
+    <a href="/rdagent">RD-Agent因子</a>
+    <a href="/backtest">回测对比</a>
+    <a href="/strategy" class="active">单票策略</a>
+    <a href="/advisor">策略顾问</a>
+    <a href="/intraday">日内择时</a>
+    <a href="/tradingagents">TradingAgents分析</a>
+  </nav>
+  <div class="meta">单票·周频调仓回测:每个调仓日取模型预测分 top-N 单票,持有 N 个交易日再换 · 信号日 T+1 收盘买入 · 对比沪深300</div>
+</header>
+
+<div class="st-wrap">
+  <div class="warn">
+    ⚠️ <b>这是高方差的探索性玩法,不是能上实盘的策略。</b>
+    单票满仓把全部风险压在模型排第一的那只上,而模型 rank_ic 仅 ~0.02(弱),top-1 判断噪声很大。
+    回测收益往往靠极少数大涨周撑起、回撤远大于分散组合,且<b>未计停牌/涨停买不进</b>(会高估)。
+    选「<b>自动·按IC选最优</b>」模型时,因为是在同一回测窗口里挑赢家,存在<b>选择偏差(轻微未来函数)</b>,实盘拿不到这么好。
+  </div>
+
+  <div class="st-bar">
+    <label>模型
+      <select id="model">
+        <option value="wf">滚动选最优(诚实版·walk-forward)</option>
+        <option value="auto">自动·按IC选最优(有偏差)</option>
+        <option value="lgb" selected>LGB</option>
+        <option value="xgb">XGB</option>
+        <option value="catboost">CatBoost</option>
+        <option value="ols">OLS</option>
+        <option value="ridge">Ridge</option>
+        <option value="lasso">Lasso</option>
+      </select>
+    </label>
+    <label>因子批次 <select id="batch"><option value="">默认 SOTA</option></select></label>
+    <label>持有(交易日) <input type="number" id="hold" value="5" min="1" max="60"/></label>
+    <label>选股数 top <input type="number" id="topn" value="1" min="1" max="20"/></label>
+    <label>往返成本 <input type="number" id="cost" value="0.002" step="0.001" min="0" max="0.05"/></label>
+    <button id="run">▶ 运行回测</button>
+    <span id="st-status"></span>
+  </div>
+
+  <div id="result" style="display:none;">
+    <div class="summary">
+      <table class="st">
+        <thead><tr><th class="l">口径</th><th>总收益</th><th>年化</th><th>夏普</th><th>最大回撤</th></tr></thead>
+        <tbody id="sum-rows"></tbody>
+      </table>
+      <div class="kpi" id="kpi"></div>
+    </div>
+    <div id="st-chart"></div>
+    <div class="kpi muted" id="wk-title"></div>
+    <div class="wk-wrap">
+      <table class="wk">
+        <thead><tr><th class="l">信号日</th><th class="l">买入日</th><th class="l">卖出日</th><th class="l">持仓</th><th class="l">模型</th><th>毛收益</th><th>净收益</th><th>基准</th></tr></thead>
+        <tbody id="wk-rows"></tbody>
+      </table>
+    </div>
+  </div>
+  <div id="empty" class="muted" style="padding:20px;">还没有回测结果。设好参数点「▶ 运行回测」,PC 会训练模型+模拟,约几分钟。</div>
+</div>
+
+<script>
+const chart = echarts.init(document.getElementById("st-chart"));
+window.addEventListener("resize", () => chart.resize());
+const $status = document.getElementById("st-status");
+const $run = document.getElementById("run");
+let polling = null, runStartedAt = 0;
+
+function pct(x){ return (x==null) ? "-" : `${x*100>=0?"+":""}${(x*100).toFixed(2)}%`; }
+function cls(x){ return (x||0)>=0 ? "up" : "down"; }
+
+async function loadBatches(){
+  try {
+    const j = await (await fetch("/api/rdagent/batches")).json();
+    const sel = document.getElementById("batch");
+    (j.batches||[]).forEach(b => {
+      const id = (typeof b === "string") ? b : (b.tag || b.batch || b.id);
+      if (!id) return;
+      const o = document.createElement("option"); o.value = id; o.textContent = id; sel.appendChild(o);
+    });
+  } catch(e){}
+}
+
+function render(d){
+  if (!d || !d.summary){ return; }
+  document.getElementById("empty").style.display = "none";
+  document.getElementById("result").style.display = "block";
+  const s = d.summary, p = d.params || {};
+  const rows = [
+    ["策略(扣成本)", s.net], ["策略(毛,不计成本)", s.gross], ["沪深300买入持有", s.bench],
+  ];
+  document.getElementById("sum-rows").innerHTML = rows.map(([name,m]) => `
+    <tr><td class="l">${name}</td>
+      <td class="${cls(m.total)}">${pct(m.total)}</td>
+      <td class="${cls(m.ann)}">${pct(m.ann)}</td>
+      <td>${(m.sharpe??0).toFixed(2)}</td>
+      <td class="down">${pct(m.mdd)}</td></tr>`).join("");
+  let modelTxt;
+  if (p.model_select === "wf") {
+    const wf = p.wf || {};
+    modelTxt = `滚动选最优(诚实版) · 回看${wf.lookback}日IC/滞后${wf.ic_lag}日<br>各模型当选周数: ${JSON.stringify(s.model_usage||{})}`;
+  } else if (p.model_select === "auto") {
+    modelTxt = `${p.model} (自动选最优, 同窗口有偏差 · 候选IC ${JSON.stringify(p.auto_candidates)})`;
+  } else { modelTxt = (p.model||"").toUpperCase(); }
+  document.getElementById("kpi").innerHTML =
+    `模型: <b>${modelTxt}</b><br>批次: ${p.batch} · 持有 ${p.hold_days} 日 · top${p.topn} · 成本 ${(p.rt_cost*100).toFixed(2)}%<br>`+
+    `周数 ${d.period.weeks} · ${d.period.start} → ${d.period.end}<br>`+
+    `周胜率 ${pct(s.winrate)} · 跑赢基准周占比 ${pct(s.win_vs_bench)}<br>`+
+    `单周最好 <span class="up">${pct(s.best_week)}</span> · 单周最差 <span class="down">${pct(s.worst_week)}</span>`;
+  // chart
+  const c = d.curve;
+  chart.setOption({ animation:false,
+    title:{ text:"净值曲线 (起点1.0)", left:"center", textStyle:{color:"#cbd5e1",fontSize:13} },
+    tooltip:{ trigger:"axis", valueFormatter:v=>(v==null?"-":(+v).toFixed(3)) },
+    legend:{ data:["策略(净)","策略(毛)","沪深300"], top:22, textStyle:{color:"#cbd5e1",fontSize:11} },
+    grid:{ left:55,right:24,top:54,bottom:54 },
+    xAxis:{ type:"category", data:c.dates, boundaryGap:false, axisLabel:{color:"#94a3b8"} },
+    yAxis:{ type:"value", scale:true, axisLabel:{color:"#94a3b8"}, splitLine:{lineStyle:{color:"#1e293b"}} },
+    dataZoom:[{type:"inside"},{type:"slider",bottom:14}],
+    series:[
+      { name:"策略(净)", type:"line", data:c.net, showSymbol:false, lineStyle:{width:2,color:"#ef4444"} },
+      { name:"策略(毛)", type:"line", data:c.gross, showSymbol:false, lineStyle:{width:1.2,color:"#fb923c",type:"dashed"} },
+      { name:"沪深300", type:"line", data:c.bench, showSymbol:false, lineStyle:{width:1.6,color:"#94a3b8"} },
+    ],
+  }, true);
+  // weekly table
+  document.getElementById("wk-title").textContent = `每周持仓与收益 (${(d.weeks||[]).length} 周)`;
+  document.getElementById("wk-rows").innerHTML = (d.weeks||[]).map(w => `
+    <tr><td class="l">${w.sig}</td><td class="l">${w.entry}</td><td class="l">${w.exit}</td>
+      <td class="l">${w.pick}</td>
+      <td class="l muted">${w.model||""}</td>
+      <td class="${cls(w.gross)}">${pct(w.gross)}</td>
+      <td class="${cls(w.net)}">${pct(w.net)}</td>
+      <td class="${cls(w.bench)}">${w.bench==null?"-":pct(w.bench)}</td></tr>`).join("");
+}
+
+async function loadResult(){
+  try { return await (await fetch("/api/strategy/result")).json(); } catch(e){ return null; }
+}
+
+async function poll(){
+  const d = await loadResult();
+  if (!d){ return; }
+  const st = d.rd_status || {};
+  if (d.rd_pending || st.state === "running"){
+    $status.textContent = "⏳ " + (st.msg || "处理中...");
+    return;
+  }
+  // 不再 pending: 看结果是否已更新
+  clearInterval(polling); polling = null; $run.disabled = false;
+  if (st.state === "error"){ $status.textContent = "❌ " + (st.msg || "失败"); return; }
+  $status.textContent = "✅ 完成 · " + (d.updated_at || "");
+  render(d);
+}
+
+document.getElementById("run").addEventListener("click", async () => {
+  const m = document.getElementById("model").value;
+  const b = document.getElementById("batch").value;
+  const hold = document.getElementById("hold").value;
+  const topn = document.getElementById("topn").value;
+  const cost = document.getElementById("cost").value;
+  $run.disabled = true; $status.textContent = "提交中...";
+  const q = new URLSearchParams({model:m, batch:b, hold_days:hold, topn:topn, rt_cost:cost});
+  try {
+    const j = await (await fetch("/api/strategy/request?"+q)).json();
+    if (!j.ok){ $status.textContent = "⚠️ " + j.message; $run.disabled = false; return; }
+    $status.textContent = "⏳ " + j.message;
+    runStartedAt = Date.now();
+    if (polling) clearInterval(polling);
+    polling = setInterval(poll, 4000);
+  } catch(e){ $status.textContent = "提交失败: " + e.message; $run.disabled = false; }
+});
+
+// 初次加载: 拉批次 + 若已有上次结果则展示
+loadBatches();
+(async () => { const d = await loadResult(); if (d && d.summary){ render(d); $status.textContent = "上次结果 · " + (d.updated_at||""); } })();
+</script>
+</body>
+</html>

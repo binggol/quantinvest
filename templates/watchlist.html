@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>quantinvest · 自选股看板</title>
+<link rel="stylesheet" href="/static/style.css"/>
+<style>
+.wl-wrap { max-width: 1100px; margin: 12px auto; padding: 0 12px; }
+.wl-add { position: relative; margin: 10px 0; }
+.wl-add input { width: 360px; max-width: 80%; padding: 6px 10px; }
+.wl-sug { position:absolute; z-index:20; background:#0f172a; border:1px solid #334155; border-radius:6px;
+  width:360px; max-width:80%; list-style:none; margin:2px 0 0; padding:0; max-height:280px; overflow:auto; }
+.wl-sug li { padding:6px 10px; cursor:pointer; font-size:13px; color:#cbd5e1; }
+.wl-sug li:hover { background:#1e293b; }
+.wl-sug .code { color:#7dd3fc; margin-right:6px; }
+.wl-sug .industry { color:#64748b; margin-left:6px; font-size:11px; }
+table.wl { width:100%; border-collapse:collapse; margin-top:8px; }
+table.wl th, table.wl td { padding:7px 10px; border-bottom:1px solid #1e293b; text-align:right; font-size:13px; }
+table.wl th { color:#94a3b8; font-weight:600; text-align:right; background:#0f172a; position:sticky; top:0; }
+table.wl td.l, table.wl th.l { text-align:left; }
+table.wl tr:hover td { background:#0b1220; }
+.up { color:#ef4444; } .down { color:#22c55e; } .flat { color:#94a3b8; }
+.wl-link { color:#7dd3fc; text-decoration:none; }
+.wl-del { color:#f87171; cursor:pointer; background:none; border:none; font-size:13px; }
+.wl-empty { color:#64748b; padding:24px; text-align:center; }
+.wl-bar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.wl-bar button { font-size:12px; }
+</style>
+</head>
+<body>
+<header class="screen-header">
+  <h1>⭐ quantinvest</h1>
+  <nav class="topnav">
+    <a href="/">K线浏览</a>
+    <a href="/watchlist" class="active">自选股</a>
+    <a href="/screen">选股</a>
+    <a href="/pattern">杯柄形态</a>
+    <a href="/rdagent">RD-Agent因子</a>
+    <a href="/backtest">回测对比</a>
+    <a href="/strategy">单票策略</a>
+    <a href="/advisor">策略顾问</a>
+    <a href="/intraday">日内择时</a>
+    <a href="/tradingagents">TradingAgents分析</a>
+  </nav>
+  <div class="meta">自选股看板 · 最新收盘价与涨跌幅(前复权) · 点名称看K线</div>
+</header>
+
+<div class="wl-wrap">
+  <div class="wl-bar">
+    <div class="wl-add">
+      <input id="q" type="text" placeholder="搜索代码/拼音/名称添加自选 (如 gzmt, 600519, 茅台)" autocomplete="off"/>
+      <ul id="sug" class="wl-sug" style="display:none;"></ul>
+    </div>
+    <button id="refresh">🔄 刷新</button>
+    <span id="stat" style="color:#94a3b8;font-size:12px;"></span>
+  </div>
+
+  <table class="wl">
+    <thead><tr>
+      <th class="l">名称</th><th class="l">代码</th><th class="l">行业</th>
+      <th>最新价</th><th>涨跌幅</th><th>日期</th><th>操作</th>
+    </tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="empty" class="wl-empty" style="display:none;">还没有自选股。上面搜索添加,或在 K线页点 ⭐ 收藏。</div>
+</div>
+
+<script>
+const $q = document.getElementById("q");
+const $sug = document.getElementById("sug");
+const $rows = document.getElementById("rows");
+const $empty = document.getElementById("empty");
+const $stat = document.getElementById("stat");
+
+async function loadList() {
+  $stat.textContent = "加载中...";
+  try {
+    const j = await (await fetch("/api/watchlist")).json();
+    render(j.items || []);
+    $stat.textContent = `共 ${j.count} 只 · ${new Date().toLocaleTimeString()}`;
+  } catch (e) { $stat.textContent = "加载失败: " + e.message; }
+}
+
+function cls(chg) { return chg > 0 ? "up" : chg < 0 ? "down" : "flat"; }
+function render(items) {
+  $empty.style.display = items.length ? "none" : "block";
+  $rows.innerHTML = items.map(it => {
+    const chg = (it.chg ?? null);
+    const chgTxt = chg === null || chg === undefined ? "-" : `${chg >= 0 ? "+" : ""}${chg.toFixed(2)}%`;
+    const last = (it.last ?? null);
+    return `<tr>
+      <td class="l"><a class="wl-link" href="/?code=${it.code}">${it.name || it.code}</a></td>
+      <td class="l">${it.ts_code || it.code}</td>
+      <td class="l">${it.industry || ""}</td>
+      <td>${last === null || last === undefined ? "-" : last.toFixed(2)}</td>
+      <td class="${cls(chg || 0)}">${chgTxt}</td>
+      <td>${it.date || ""}</td>
+      <td><a class="wl-link" href="/?code=${it.code}">看K线</a>
+          &nbsp;<button class="wl-del" data-code="${it.code}">删除</button></td>
+    </tr>`;
+  }).join("");
+  $rows.querySelectorAll(".wl-del").forEach(b =>
+    b.addEventListener("click", () => removeCode(b.dataset.code)));
+}
+
+async function addCode(code) {
+  await fetch("/api/watchlist/add", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
+  $q.value = ""; $sug.style.display = "none";
+  loadList();
+}
+async function removeCode(code) {
+  await fetch("/api/watchlist/remove", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ code }) });
+  loadList();
+}
+
+let debTimer = null;
+$q.addEventListener("input", () => { clearTimeout(debTimer); debTimer = setTimeout(doSearch, 120); });
+$q.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { const f = $sug.querySelector("li"); if (f) f.click(); }
+  else if (e.key === "Escape") $sug.style.display = "none";
+});
+document.addEventListener("click", (e) => { if (!$sug.contains(e.target) && e.target !== $q) $sug.style.display = "none"; });
+
+async function doSearch() {
+  const q = $q.value.trim();
+  if (!q) { $sug.style.display = "none"; return; }
+  try {
+    const j = await (await fetch("/api/search?q=" + encodeURIComponent(q))).json();
+    const hits = j.hits || [];
+    if (!hits.length) { $sug.style.display = "none"; return; }
+    $sug.innerHTML = hits.map(h =>
+      `<li data-code="${h.code}"><span class="code">${h.code}</span>${h.name}<span class="industry">${h.industry || ""}</span></li>`).join("");
+    $sug.querySelectorAll("li").forEach(li => li.addEventListener("click", () => addCode(li.dataset.code)));
+    $sug.style.display = "block";
+  } catch (e) { $sug.style.display = "none"; }
+}
+
+document.getElementById("refresh").addEventListener("click", loadList);
+loadList();
+setInterval(loadList, 60000); // 每分钟自动刷新
+</script>
+</body>
+</html>

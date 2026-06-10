@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>quantinvest · 回测对比</title>
+<link rel="stylesheet" href="/static/style.css"/>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+.bt-layout { display:flex; gap:12px; padding:10px; }
+.bt-side { width:340px; flex:none; }
+.bt-main { flex:1; min-width:0; }
+#bt-chart { width:100%; height:560px; }
+.bt-bar { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:8px; }
+.bt-bar button, .bt-bar select { font-size:12px; }
+table.bt { width:100%; border-collapse:collapse; font-size:12px; }
+table.bt th, table.bt td { padding:5px 6px; border-bottom:1px solid #1e293b; text-align:right; }
+table.bt th { color:#94a3b8; background:#0f172a; position:sticky; top:0; }
+table.bt td.l, table.bt th.l { text-align:left; }
+table.bt tr:hover td { background:#0b1220; }
+.up { color:#ef4444; } .down { color:#22c55e; }
+.swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:5px; vertical-align:middle; }
+.bt-empty { color:#64748b; padding:24px; }
+</style>
+</head>
+<body>
+<header class="screen-header">
+  <h1>📉 quantinvest</h1>
+  <nav class="topnav">
+    <a href="/">K线浏览</a>
+    <a href="/watchlist">自选股</a>
+    <a href="/screen">选股</a>
+    <a href="/pattern">杯柄形态</a>
+    <a href="/rdagent">RD-Agent因子</a>
+    <a href="/backtest" class="active">回测对比</a>
+    <a href="/strategy">单票策略</a>
+    <a href="/advisor">策略顾问</a>
+    <a href="/intraday">日内择时</a>
+    <a href="/tradingagents">TradingAgents分析</a>
+  </nav>
+  <div class="meta">各因子批次/模型的回测净值曲线对比 · 直观看哪批因子好 · 由模型实验室(run_model)产出</div>
+  <div class="meta" style="color:#64748b;font-size:11px;">注:每条曲线的回测截止日 = 该批次<b>挖掘时的数据快照</b>(约挖矿当周),不随新数据自动延后;要更新需用当前数据重评估该批次因子。少最后几天对"哪批/哪个模型好"的排序无影响。</div>
+</header>
+
+<div class="bt-layout">
+  <aside class="bt-side">
+    <div class="bt-bar">
+      <label>显示:
+        <select id="mode">
+          <option value="excess_nv" selected>超额净值(vs基准)</option>
+          <option value="strat">策略净值</option>
+        </select>
+      </label>
+      <button id="refresh">🔄 刷新</button>
+    </div>
+    <div class="bt-bar" style="gap:6px;">
+      <button id="all">全选</button><button id="none">清空</button>
+      <span id="stat" style="color:#94a3b8;"></span>
+    </div>
+    <table class="bt">
+      <thead><tr>
+        <th></th><th class="l">批次</th><th class="l">模型</th>
+        <th>年化超额</th><th>IR</th><th>最大回撤</th>
+      </tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty" class="bt-empty" style="display:none;">
+      还没有回测曲线。去 <a href="/rdagent" style="color:#7dd3fc;">RD-Agent因子</a> 页面用"模型实验室"对某批次跑一次回测(或🚀一键全跑),曲线就会出现在这里。
+    </div>
+  </aside>
+  <main class="bt-main">
+    <div id="bt-chart"></div>
+  </main>
+</div>
+
+<script>
+const chart = echarts.init(document.getElementById("bt-chart"));
+window.addEventListener("resize", () => chart.resize());
+const COLORS = ["#60a5fa","#f59e0b","#34d399","#f472b6","#a78bfa","#fb7185","#22d3ee","#facc15","#4ade80","#fca5a5","#93c5fd","#fdba74"];
+const $rows = document.getElementById("rows");
+const $empty = document.getElementById("empty");
+const $stat = document.getElementById("stat");
+const $mode = document.getElementById("mode");
+let curves = [];          // [{key, batch, model, dates, strat, bench, excess_nv, excess, ir, maxdd, color, on}]
+let updatedAt = "";
+
+async function load() {
+  $stat.textContent = "加载中...";
+  try {
+    const j = await (await fetch("/api/rdagent/model_curves")).json();
+    const c = j.curves || {};
+    updatedAt = j.updated_at || "";
+    curves = Object.keys(c).map((key, i) => {
+      const v = c[key];
+      return { key, batch: v.batch, model: v.model, dates: v.dates || [],
+        strat: v.strat || [], bench: v.bench || [], excess_nv: v.excess_nv || [],
+        excess: v.excess, ir: v.ir, maxdd: v.maxdd, updated_at: v.updated_at,
+        color: COLORS[i % COLORS.length], on: true };
+    });
+    // 年化超额从高到低
+    curves.sort((a, b) => (b.excess ?? -99) - (a.excess ?? -99));
+    curves.forEach((c, i) => c.color = COLORS[i % COLORS.length]);
+    renderTable(); draw();
+    $stat.textContent = `${curves.length} 条 · ${updatedAt}`;
+  } catch (e) { $stat.textContent = "加载失败: " + e.message; }
+}
+
+function pct(x) { return (x === undefined || x === null) ? "-" : `${(x*100>=0?"+":"")}${(x*100).toFixed(2)}%`; }
+function renderTable() {
+  $empty.style.display = curves.length ? "none" : "block";
+  $rows.innerHTML = curves.map((c, i) => `
+    <tr>
+      <td><input type="checkbox" data-i="${i}" ${c.on?"checked":""}/></td>
+      <td class="l"><span class="swatch" style="background:${c.color}"></span>${c.batch}</td>
+      <td class="l">${c.model}</td>
+      <td class="${(c.excess||0)>=0?"up":"down"}">${pct(c.excess)}</td>
+      <td>${c.ir==null?"-":c.ir}</td>
+      <td class="down">${pct(c.maxdd)}</td>
+    </tr>`).join("");
+  $rows.querySelectorAll("input").forEach(cb => cb.addEventListener("change", () => {
+    curves[+cb.dataset.i].on = cb.checked; draw();
+  }));
+}
+
+function draw() {
+  const mode = $mode.value;                 // excess_nv | strat
+  const sel = curves.filter(c => c.on);
+  // 日期并集
+  const dset = new Set();
+  sel.forEach(c => c.dates.forEach(d => dset.add(d)));
+  const dates = [...dset].sort();
+  const idx = new Map(dates.map((d, i) => [d, i]));
+
+  const series = [];
+  const legend = [];
+  sel.forEach(c => {
+    const arr = new Array(dates.length).fill("-");
+    const vals = mode === "strat" ? c.strat : c.excess_nv;
+    for (let i = 0; i < c.dates.length; i++) { const j = idx.get(c.dates[i]); if (j !== undefined) arr[j] = vals[i]; }
+    const name = `${c.batch}/${c.model}`;
+    legend.push(name);
+    series.push({ name, type: "line", data: arr, showSymbol: false, connectNulls: true,
+      lineStyle: { width: 1.6, color: c.color }, emphasis: { focus: "series" } });
+  });
+  // 策略净值模式: 叠加一条基准(取点最多的曲线的 bench)
+  if (mode === "strat" && sel.length) {
+    let base = sel[0]; sel.forEach(c => { if (c.dates.length > base.dates.length) base = c; });
+    const arr = new Array(dates.length).fill("-");
+    for (let i = 0; i < base.dates.length; i++) { const j = idx.get(base.dates[i]); if (j !== undefined) arr[j] = base.bench[i]; }
+    legend.push("基准(CSI300)");
+    series.push({ name: "基准(CSI300)", type: "line", data: arr, showSymbol: false, connectNulls: true,
+      lineStyle: { width: 1.6, color: "#94a3b8", type: "dashed" } });
+  }
+
+  chart.setOption({
+    animation: false,
+    title: { text: mode === "strat" ? "策略净值 vs 基准 (起点1.0)" : "超额净值 (相对基准, 起点1.0, 越高越好)",
+      left: "center", textStyle: { color: "#cbd5e1", fontSize: 13 } },
+    tooltip: { trigger: "axis", order: "valueDesc",
+      valueFormatter: v => (v === "-" || v == null) ? "-" : (+v).toFixed(3) },
+    legend: { data: legend, top: 24, type: "scroll", textStyle: { color: "#cbd5e1", fontSize: 11 } },
+    grid: { left: 55, right: 24, top: 60, bottom: 60 },
+    xAxis: { type: "category", data: dates, boundaryGap: false, axisLabel: { color: "#94a3b8" } },
+    yAxis: { type: "value", scale: true, axisLabel: { color: "#94a3b8" }, splitLine: { lineStyle: { color: "#1e293b" } } },
+    dataZoom: [{ type: "inside" }, { type: "slider", bottom: 16 }],
+    series,
+  }, true);
+}
+
+$mode.addEventListener("change", draw);
+document.getElementById("refresh").addEventListener("click", load);
+document.getElementById("all").addEventListener("click", () => { curves.forEach(c => c.on = true); renderTable(); draw(); });
+document.getElementById("none").addEventListener("click", () => { curves.forEach(c => c.on = false); renderTable(); draw(); });
+load();
+</script>
+</body>
+</html>

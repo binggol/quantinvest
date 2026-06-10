@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>quantinvest · 日内择时</title>
+<link rel="stylesheet" href="/static/style.css"/>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+.id-layout { display:flex; gap:12px; padding:10px; }
+.id-side { width:280px; flex:none; }
+.id-main { flex:1; min-width:0; }
+#id-chart { width:100%; height:520px; }
+.id-bar { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px; }
+.id-bar select, .id-bar input, .id-bar button { font-size:12px; }
+.id-stocks { max-height:430px; overflow:auto; border:1px solid #1e293b; border-radius:6px; }
+.id-stocks div { padding:6px 10px; cursor:pointer; font-size:13px; color:#cbd5e1; border-bottom:1px solid #11192b; }
+.id-stocks div:hover { background:#0b1220; }
+.id-stocks div.active { background:#1e293b; color:#fff; }
+.id-hint { background:#0f172a; border:1px solid #334155; border-radius:6px; padding:10px; margin-bottom:8px; font-size:13px; line-height:1.7; }
+.up { color:#ef4444; } .down { color:#22c55e; } .muted { color:#94a3b8; }
+</style>
+</head>
+<body>
+<header class="screen-header">
+  <h1>⏱️ quantinvest</h1>
+  <nav class="topnav">
+    <a href="/">K线浏览</a>
+    <a href="/watchlist">自选股</a>
+    <a href="/screen">选股</a>
+    <a href="/pattern">杯柄形态</a>
+    <a href="/rdagent">RD-Agent因子</a>
+    <a href="/backtest">回测对比</a>
+    <a href="/strategy">单票策略</a>
+    <a href="/advisor">策略顾问</a>
+    <a href="/intraday" class="active">日内择时</a>
+    <a href="/tradingagents">TradingAgents分析</a>
+  </nav>
+  <div class="meta">对买入清单的股票看当日分时图 + VWAP均价, 辅助挑日内买点 (A股T+1, 仅入场择时) · 仅研究参考</div>
+</header>
+
+<div class="id-layout">
+  <aside class="id-side">
+    <div class="id-bar">
+      <label style="font-size:12px;color:#cbd5e1;">清单来源
+        <select id="src" style="width:100%;"></select>
+      </label>
+    </div>
+    <div class="id-bar">
+      <label style="font-size:12px;color:#94a3b8;">日期 <input id="date" type="text" placeholder="YYYYMMDD(空=最新)" style="width:110px;"/></label>
+      <label style="font-size:12px;color:#94a3b8;">周期
+        <select id="freq"><option selected>5min</option><option>15min</option><option>30min</option><option>60min</option></select>
+      </label>
+    </div>
+    <div id="src-info" class="muted" style="font-size:12px;margin:4px 0;">加载清单中...</div>
+    <div class="id-stocks" id="stocks"></div>
+  </aside>
+  <main class="id-main">
+    <div id="hint" class="id-hint muted">左侧选清单 → 点一只股票看当日分时择时。</div>
+    <div id="id-chart"></div>
+  </main>
+</div>
+
+<script>
+const chart = echarts.init(document.getElementById("id-chart"));
+window.addEventListener("resize", () => chart.resize());
+const $src = document.getElementById("src");
+const $srcInfo = document.getElementById("src-info");
+const $stocks = document.getElementById("stocks");
+const $date = document.getElementById("date");
+const $freq = document.getElementById("freq");
+const $hint = document.getElementById("hint");
+const MODEL_LABEL = {lgb:"LGB",xgb:"XGB",catboost:"CatBoost",ols:"OLS",ridge:"Ridge",lasso:"Lasso"};
+let hits = [], curCode = "";
+
+async function loadSources() {
+  let idx = [];
+  try { idx = (await (await fetch("/api/rdagent/buylists")).json()).buylists || []; } catch (e) {}
+  $src.innerHTML = '<option value="">默认 (最新预测)</option>' +
+    idx.map(x => `<option value="${x.tag}">${MODEL_LABEL[x.model]||x.model} [${x.batch}] (${x.n_hits}只)</option>`).join("");
+}
+async function loadList() {
+  const src = $src.value;
+  try {
+    const j = src ? await (await fetch(`/api/rdagent/buylist?tag=${encodeURIComponent(src)}`)).json()
+                  : await (await fetch("/api/rdagent")).json();
+    hits = j.hits || [];
+    $srcInfo.innerHTML = `${hits.length} 只 · 基于 <b>${j.as_of||"?"}</b> · 点股票看分时`;
+    $stocks.innerHTML = hits.map(h => `<div data-code="${h.code||h.ts_code}">${h.code} ${h.name||""}</div>`).join("");
+    $stocks.querySelectorAll("div").forEach(d => d.addEventListener("click", () => {
+      $stocks.querySelectorAll("div").forEach(x => x.classList.remove("active"));
+      d.classList.add("active");
+      loadIntraday(d.dataset.code);
+    }));
+  } catch (e) { $srcInfo.innerHTML = `<span class="warn">清单加载失败: ${e.message}</span>`; }
+}
+$src.addEventListener("change", loadList);
+$freq.addEventListener("change", () => { if (curCode) loadIntraday(curCode); });
+$date.addEventListener("change", () => { if (curCode) loadIntraday(curCode); });
+
+async function loadIntraday(code) {
+  curCode = code;
+  $hint.innerHTML = `<span class="muted">加载 ${code} 分时...</span>`;
+  try {
+    const url = `/api/intraday?code=${code}&freq=${$freq.value}` + ($date.value.trim() ? `&date=${$date.value.trim()}` : "");
+    const d = await (await fetch(url)).json();
+    if (d.error) { $hint.innerHTML = `<span class="warn">${d.error}</span>`; return; }
+    if (!d.times || !d.times.length) { $hint.innerHTML = `<span class="warn">${d.message||"无分钟数据"}</span>`; chart.clear(); return; }
+    draw(d); renderHint(d);
+  } catch (e) { $hint.innerHTML = `<span class="warn">${e.message}</span>`; }
+}
+
+function renderHint(d) {
+  const n = d.close.length;
+  const last = d.close[n-1], vwap = d.vwap[n-1];
+  const hi = Math.max(...d.high), lo = Math.min(...d.low);
+  const pc = d.pre_close;
+  const vsV = vwap ? ((last-vwap)/vwap*100) : 0;
+  const vsPc = pc ? ((last-pc)/pc*100) : null;
+  const pos = (last-lo)/((hi-lo)||1)*100;   // 在日内区间的位置 0=最低 100=最高
+  let tip;
+  if (vsV < -0.3) tip = `<span class="down">现价低于均价 ${vsV.toFixed(2)}% → 相对便宜, 偏好的入场区</span>`;
+  else if (vsV > 0.3) tip = `<span class="up">现价高于均价 +${vsV.toFixed(2)}% → 偏贵, 可等回踩均价</span>`;
+  else tip = `<span class="muted">现价贴近均价, 中性</span>`;
+  $hint.innerHTML =
+    `<b>${d.code} ${d.ts_code}</b> · ${d.date} · ${d.freq}　` +
+    `现价 <b>${last.toFixed(2)}</b>　均价(VWAP) <b>${vwap.toFixed(2)}</b>　` +
+    (vsPc!=null ? `较昨收 <span class="${vsPc>=0?'up':'down'}">${vsPc>=0?'+':''}${vsPc.toFixed(2)}%</span>　` : "") +
+    `日内 ${lo.toFixed(2)}~${hi.toFixed(2)} (现处 ${pos.toFixed(0)}%)<br>` +
+    `<b>入场提示:</b> ${tip}　<span class="muted">(A股T+1, 仅供入场时点参考)</span>`;
+}
+
+function draw(d) {
+  const n = d.times.length;
+  // 开盘区间 (前6根, 约前30分钟 @5min)
+  const orN = Math.min(6, n);
+  const orHi = Math.max(...d.high.slice(0, orN)), orLo = Math.min(...d.low.slice(0, orN));
+  const series = [
+    { name:"价格", type:"line", data:d.close, showSymbol:false, lineStyle:{width:1.5,color:"#60a5fa"}, areaStyle:{color:"rgba(96,165,250,0.08)"},
+      markLine: d.pre_close ? { symbol:"none", silent:true, data:[{yAxis:d.pre_close, lineStyle:{color:"#94a3b8",type:"dashed"}, label:{formatter:"昨收 "+d.pre_close.toFixed(2), color:"#94a3b8"}}] } : undefined,
+      markArea:{ silent:true, itemStyle:{color:"rgba(250,204,21,0.07)"}, data:[[{xAxis:d.times[0]},{xAxis:d.times[orN-1]}]] } },
+    { name:"均价VWAP", type:"line", data:d.vwap, showSymbol:false, lineStyle:{width:1.5,color:"#f59e0b"} },
+    { name:"量", type:"bar", xAxisIndex:1, yAxisIndex:1,
+      data:d.vol.map((v,i)=>({value:v, itemStyle:{color: d.close[i]>=(i>0?d.close[i-1]:d.close[i])?"#ef4444":"#22c55e"}})) },
+  ];
+  chart.setOption({
+    animation:false,
+    title:{ text:`分时图 (开盘区间黄色, 昨收虚线)`, left:"center", textStyle:{color:"#cbd5e1",fontSize:12} },
+    tooltip:{ trigger:"axis", axisPointer:{type:"cross"} },
+    legend:{ data:["价格","均价VWAP","量"], top:22, textStyle:{color:"#cbd5e1",fontSize:11} },
+    grid:[{left:55,right:18,top:50,height:"62%"},{left:55,right:18,top:"80%",height:"14%"}],
+    xAxis:[
+      {type:"category",data:d.times,boundaryGap:false,axisLabel:{color:"#94a3b8"}},
+      {type:"category",gridIndex:1,data:d.times,boundaryGap:false,axisLabel:{show:false}},
+    ],
+    yAxis:[
+      {scale:true,axisLabel:{color:"#94a3b8"},splitLine:{lineStyle:{color:"#1e293b"}}},
+      {gridIndex:1,splitNumber:2,axisLabel:{show:false},splitLine:{show:false}},
+    ],
+    series,
+  }, true);
+}
+
+loadSources().then(loadList);
+</script>
+</body>
+</html>
