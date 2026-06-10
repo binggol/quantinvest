@@ -15,7 +15,7 @@
 .st-bar button { font-size:13px; padding:5px 14px; }
 #st-status { color:#94a3b8; font-size:12px; }
 .warn { background:#1f1604; border:1px solid #92400e; color:#fcd34d; font-size:12px; padding:8px 12px; border-radius:6px; margin-bottom:10px; line-height:1.5; }
-#st-chart { width:100%; height:420px; margin:10px 0; }
+#st-chart { width:100%; height:480px; margin:10px 0; }
 table.st { border-collapse:collapse; font-size:12px; }
 table.st th, table.st td { padding:5px 10px; border-bottom:1px solid #1e293b; text-align:right; }
 table.st th { color:#94a3b8; background:#0f172a; }
@@ -163,6 +163,9 @@ function render(d){
       { name:"沪深300", type:"line", data:c.bench, showSymbol:false, lineStyle:{width:1.6,color:"#94a3b8"} },
     ],
   }, true);
+  // #result 初始 display:none, init 时容器高度为0导致图很小; 显示后强制 resize
+  setTimeout(()=>chart.resize(), 0);
+  requestAnimationFrame(()=>chart.resize());
   // weekly table
   document.getElementById("wk-title").textContent = `每周持仓与收益 (${(d.weeks||[]).length} 周)`;
   document.getElementById("wk-rows").innerHTML = (d.weeks||[]).map(w => `
