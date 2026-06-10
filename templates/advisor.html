@@ -59,7 +59,7 @@ table.tb td.l, table.tb th.l { text-align:left; }
     <a href="/intraday">日内择时</a>
     <a href="/tradingagents">TradingAgents分析</a>
   </nav>
-  <div class="meta">沪深300 · 季频对冲 · MOM/VAL 因子动量择时 — 近4季哪类因子强就用哪类 · 跨2010-2026 十个牛熊周期验证</div>
+  <div class="meta">沪深300 · 季频对冲 · MOM/VAL 三信号投票择时(因子动量+大盘趋势+估值价差)· 跨2010-2026 十个牛熊周期验证</div>
 </header>
 
 <div class="ad-wrap">
@@ -170,9 +170,14 @@ function render(d){
   const badge=document.getElementById("reg-badge");
   badge.className="reg-badge reg-"+c.regime;
   badge.textContent=(c.regime==="VAL")?"价值风格":"动量风格";
+  const sg=c.signals||{};
+  const pill=v=>v?`<span class="pill pill-${v}">${v==="VAL"?"价值":"动量"}</span>`:`<span class="muted">—</span>`;
+  const fm=sg.FM||{}, td=sg.TREND||{}, vs=sg.VSPREAD||{};
   document.getElementById("reg-desc").innerHTML=
-    `当前该侧重 <b>${c.regime_label}</b>。<br>`+
-    `判据(近${tr.K}季已实现超额): 动量 <span class="${cls(tr.MOM)}">${pct(tr.MOM)}</span> vs 价值 <span class="${cls(tr.VAL)}">${pct(tr.VAL)}</span> → 选更强的一侧。<br>`+
+    `当前该侧重 <b>${c.regime_label}</b> —— <b>三信号投票</b>结果。<br>`+
+    `&nbsp;• 因子动量 → ${pill(fm.vote)} <span class="muted">(近${tr.K}季 动量${pct(fm.mom)} vs 价值${pct(fm.val)})</span><br>`+
+    `&nbsp;• 大盘趋势 → ${pill(td.vote)} <span class="muted">(沪深300近6月 ${td.ret126==null?"-":pct(td.ret126)})</span><br>`+
+    `&nbsp;• 估值价差 → ${pill(vs.vote)} <span class="muted">(当前离散${vs.now==null?"-":vs.now} vs 历史中位${vs.median==null?"-":vs.median};宽→价值便宜)</span><br>`+
     `<span class="muted">数据截至 ${c.as_of} · 成分 ${c.members_date} · 估值 ${c.db_date||"-"} · 季频调仓(~60交易日换一次)</span>`;
   // 调仓倒计时 (JS 按今天实时算, 哪天看都准)
   const $rb=document.getElementById("rebalance-hint");
