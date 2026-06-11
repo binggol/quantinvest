@@ -41,7 +41,7 @@ table.tb th{color:#94a3b8;background:#0f172a;position:sticky;top:0}table.tb td.l
     <a href="/advisor">策略顾问</a><a href="/advisor-pro" class="active">策略顾问Pro</a>
     <a href="/intraday">日内择时</a><a href="/tradingagents">TradingAgents分析</a>
   </nav>
-  <div class="meta">沪深300·季频对冲·regime-VOTE切腿 + <b>分腿正交选股增强</b>(MOM腿:挖掘量价簇+EPS上修+52周新高;VAL腿:应计质量+行业龙头)</div>
+  <div class="meta">沪深300·季频对冲·regime-VOTE切腿 + <b>分腿正交选股增强</b>(MOM腿:挖掘量价簇+EPS上修+52周新高;VAL腿:应计质量+行业龙头+换手波动率)</div>
 </header>
 
 <div class="ad-wrap">
@@ -65,7 +65,7 @@ table.tb th{color:#94a3b8;background:#0f172a;position:sticky;top:0}table.tb td.l
         <thead><tr>
           <th class="l">#</th><th class="l">代码</th><th class="l">名称</th><th>综合分</th>
           <th>PE</th><th>PB</th><th>市值(亿)</th>
-          <th>应计质量</th><th>EPS上修</th><th>挖掘分</th><th>龙头</th><th>52新高</th>
+          <th>应计质量</th><th>EPS上修</th><th>挖掘分</th><th>龙头</th><th>52新高</th><th>换手波动</th>
         </tr></thead>
         <tbody id="bask-rows"></tbody>
       </table>
@@ -122,7 +122,7 @@ function render(d){
       <td>${b.score!=null?b.score.toFixed(2):"-"}</td>
       <td>${b.pe!=null?b.pe:"-"}</td><td>${b.pb!=null?b.pb:"-"}</td><td>${b.mv_yi!=null?b.mv_yi.toLocaleString():"-"}</td>
       <td>${b["应计质量"]!=null?b["应计质量"]:"-"}</td><td>${b["EPS上修"]!=null?b["EPS上修"]:"-"}</td>
-      <td>${b["挖掘分"]!=null?b["挖掘分"]:"-"}</td><td>${b["龙头"]!=null?b["龙头"]:"-"}</td><td>${b["新高"]!=null?b["新高"]:"-"}</td></tr>`).join("");
+      <td>${b["挖掘分"]!=null?b["挖掘分"]:"-"}</td><td>${b["龙头"]!=null?b["龙头"]:"-"}</td><td>${b["新高"]!=null?b["新高"]:"-"}</td><td>${b["换手波动"]!=null?b["换手波动"]:"-"}</td></tr>`).join("");
   document.getElementById("kpis").innerHTML=[
     [`<span class="${cls(t.net_ann)}">${pct(t.net_ann)}</span>`,"净超额/年(对冲后)"],
     [(t.sharpe??0).toFixed(2),"净夏普"],[pct(t.winrate,0),"季度胜率"],
