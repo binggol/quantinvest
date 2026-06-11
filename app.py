@@ -51,6 +51,7 @@ FACTOR_VALUES = PREDICT_JSON.parent / "factor_values.json"    # 因子值结果 
 FACTOR_STATUS = PREDICT_JSON.parent / "factor_status.json"    # 因子抽取进度
 STRATEGY_RESULT = PREDICT_JSON.parent / "strategy_result.json"  # 单票·周频策略回测结果 (PC 写)
 REGIME_ADVISOR = PREDICT_JSON.parent / "regime_advisor.json"    # 策略顾问: regime择时 当前推荐+战绩 (PC 写)
+REGIME_ADVISOR_PRO = PREDICT_JSON.parent / "regime_advisor_pro.json"  # 策略顾问Pro: 增强版(regime+正交选股) (PC 写)
 WATCHLIST_JSON = Path(STOCK_META_DB).parent / "watchlist.json"  # 自选股 (持久卷 /app/data)
 TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN", "")
 DAILY_HOUR = int(os.environ.get("DAILY_UPDATE_HOUR", "21"))
@@ -1401,6 +1402,35 @@ def api_advisor_request():
     except Exception as e:
         return jsonify({"ok": False, "message": f"写请求失败: {e}"})
     return jsonify({"ok": True, "message": "已通知 PC: 刷新策略顾问 (拉最新数据+重算, 约1分钟)"})
+
+
+@app.route("/advisor-pro")
+def advisor_pro_page():
+    return render_template("advisor_pro.html")
+
+
+@app.route("/api/advisor-pro/result")
+def api_advisor_pro_result():
+    """策略顾问Pro: 增强版(regime+正交选股) 当前推荐+战绩 (PC regime_advisor_pro.py 写)."""
+    data = _read_json(REGIME_ADVISOR_PRO) or {}
+    data["rd_pending"] = RDAGENT_REQUEST.exists()
+    data["rd_status"] = _read_json(RDAGENT_STATUS)
+    return jsonify(data)
+
+
+@app.route("/api/advisor-pro/request")
+def api_advisor_pro_request():
+    """网页按钮触发: 刷新策略顾问Pro (PC 重算增强版 regime + 正交选股篮子)."""
+    if RDAGENT_REQUEST.exists():
+        return jsonify({"ok": False, "message": "已有 RD-Agent 任务在排队/处理中"})
+    try:
+        RDAGENT_REQUEST.parent.mkdir(parents=True, exist_ok=True)
+        RDAGENT_REQUEST.write_text(json.dumps(
+            {"requested_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "regime_adv_pro": True},
+            ensure_ascii=False), encoding="utf-8")
+    except Exception as e:
+        return jsonify({"ok": False, "message": f"写请求失败: {e}"})
+    return jsonify({"ok": True, "message": "已通知 PC: 刷新策略顾问Pro (重算增强版, 约1-2分钟)"})
 
 
 @app.route("/api/health")

@@ -119,6 +119,7 @@ while ($true) {
     $rdBatch = ""; $rdMine = $false; $rdLoopN = 5; $rdModelEval = $false; $rdModel = "lgb"; $rdRunAll = $false
     $rdStrat = $false; $rdHold = 5; $rdTopN = 1; $rdCost = 0.002   # 单票·周频策略回测
     $rdRegimeAdv = $false   # 策略顾问: regime择时 当前推荐+战绩
+    $rdRegimeAdvPro = $false # 策略顾问Pro: 增强版(regime+正交选股)
     try {
       $rr = (Get-Content $rdReqFile -Raw | ConvertFrom-Json)
       if ($null -ne $rr.retrain)    { $rdRetrain = [bool]$rr.retrain }
@@ -133,7 +134,28 @@ while ($true) {
       if ($null -ne $rr.topn)       { $rdTopN = [int]$rr.topn }
       if ($null -ne $rr.rt_cost)    { $rdCost = [double]$rr.rt_cost }
       if ($null -ne $rr.regime_adv) { $rdRegimeAdv = [bool]$rr.regime_adv }
+      if ($null -ne $rr.regime_adv_pro) { $rdRegimeAdvPro = [bool]$rr.regime_adv_pro }
     } catch {}
+
+    # ===== 策略顾问Pro: 增强版(regime+正交选股), 写 regime_advisor_pro.json =====
+    if ($rdRegimeAdvPro) {
+      Write-Host "[watch] 策略顾问Pro: 拉最新数据 + 重算增强版..." -ForegroundColor Cyan
+      Write-RdStatus "running" "策略顾问Pro: 同步行情 + 重算 regime + 正交选股篮子 (~1-2分钟)"
+      robocopy "$qlibData" "C:\qlib_data\cn_data" /MIR /MT:8 /R:1 /W:2 /XF csi300.txt csi300.txt.bak /NFL /NDL /NJH /NP | Out-Null
+      if (-not $env:TUSHARE_TOKEN -and (Test-Path "$proj\data\.tushare_token")) { $env:TUSHARE_TOKEN = (Get-Content "$proj\data\.tushare_token" -Raw).Trim() }
+      & "D:\anaconda3\python.exe" "C:\rdagent\regime_advisor_pro.py"
+      $advExit = $LASTEXITCODE
+      if ($advExit -eq 0 -and (Test-Path "C:\rdagent\regime_advisor_pro.json")) {
+        Copy-Item "C:\rdagent\regime_advisor_pro.json" (Join-Path $shared "regime_advisor_pro.json") -Force
+        Write-RdStatus "done" "策略顾问Pro已更新: 见 策略顾问Pro 页"
+        Write-Host "[watch] 策略顾问Pro完成" -ForegroundColor Green
+      } else {
+        Write-RdStatus "error" "策略顾问Pro失败 exit $advExit (检查 regime_advisor_pro.py)"
+        Write-Host "[watch] 策略顾问Pro失败 exit $advExit" -ForegroundColor Red
+      }
+      Remove-Item $rdReqFile -Force -ErrorAction SilentlyContinue
+      continue
+    }
 
     # ===== 策略顾问: regime择时 当前推荐篮子+战绩, 拉最新数据重算, 写 regime_advisor.json =====
     if ($rdRegimeAdv) {

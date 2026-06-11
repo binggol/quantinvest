@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>quantinvest · 策略顾问Pro</title>
+<link rel="stylesheet" href="/static/style.css"/>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+.ad-wrap{padding:10px;max-width:1150px}
+.ad-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.ad-bar button{font-size:13px;padding:5px 14px}
+#ad-status{color:#94a3b8;font-size:12px}
+.card{background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:16px 18px;margin-bottom:14px}
+.reg-now{display:flex;align-items:center;gap:18px;flex-wrap:wrap}
+.reg-badge{font-size:28px;font-weight:700;padding:10px 22px;border-radius:10px}
+.reg-VAL{background:#0c2a1a;color:#34d399;border:1px solid #14532d}
+.reg-MOM{background:#2a1408;color:#fb923c;border:1px solid #7c2d12}
+.reg-desc{font-size:13px;color:#cbd5e1;line-height:1.6}.reg-desc b{color:#e2e8f0}
+.rebal{margin-top:12px;padding:9px 14px;border-radius:8px;font-size:13px;background:#0b1220;border:1px solid #1e293b;color:#cbd5e1}
+.rebal b{font-size:16px}.rebal.due{background:#1f1604;border-color:#92400e;color:#fcd34d}
+.kpis{display:flex;gap:26px;flex-wrap:wrap}.kpi-box{text-align:center}.kpi-box .v{font-size:22px;font-weight:700}.kpi-box .l{font-size:11px;color:#94a3b8}
+h2.sec{font-size:15px;color:#e2e8f0;margin:18px 0 8px}.muted{color:#64748b;font-size:12px}
+table.tb{width:100%;border-collapse:collapse;font-size:12px}
+table.tb th,table.tb td{padding:5px 9px;border-bottom:1px solid #1e293b;text-align:right}
+table.tb th{color:#94a3b8;background:#0f172a;position:sticky;top:0}table.tb td.l,table.tb th.l{text-align:left}
+.bask-wrap{max-height:560px;overflow:auto;border:1px solid #1e293b;border-radius:8px}
+#ad-chart{width:100%;height:460px}.up{color:#ef4444}.down{color:#22c55e}
+.warn{background:#1f1604;border:1px solid #92400e;color:#fcd34d;font-size:12px;padding:10px 14px;border-radius:8px;line-height:1.7}.warn ul{margin:6px 0 0;padding-left:18px}
+.pill{font-size:11px;padding:2px 8px;border-radius:10px}.pill-VAL{background:#0c2a1a;color:#34d399}.pill-MOM{background:#2a1408;color:#fb923c}
+.oos{font-size:10px;padding:1px 5px;border-radius:6px;background:#1e3a5f;color:#93c5fd;margin-left:4px}
+.badge-pro{font-size:11px;background:#3b0764;color:#e9d5ff;padding:2px 8px;border-radius:10px;margin-left:6px}
+</style>
+</head>
+<body>
+<header class="screen-header">
+  <h1>📈 quantinvest</h1>
+  <nav class="topnav">
+    <a href="/">K线浏览</a><a href="/watchlist">自选股</a><a href="/screen">选股</a><a href="/pattern">杯柄形态</a>
+    <a href="/rdagent">RD-Agent因子</a><a href="/backtest">回测对比</a><a href="/strategy">单票策略</a>
+    <a href="/advisor">策略顾问</a><a href="/advisor-pro" class="active">策略顾问Pro</a>
+    <a href="/intraday">日内择时</a><a href="/tradingagents">TradingAgents分析</a>
+  </nav>
+  <div class="meta">沪深300·季频对冲·regime-VOTE切腿 + <b>分腿正交选股增强</b>(MOM腿:挖掘量价簇+EPS上修+52周新高;VAL腿:应计质量+行业龙头)</div>
+</header>
+
+<div class="ad-wrap">
+  <div class="ad-bar">
+    <button id="refresh">🔄 拉最新数据·重算</button><span id="ad-status"></span>
+  </div>
+  <div id="empty" class="muted" style="padding:20px;">还没有结果。点「🔄 拉最新数据·重算」让 PC 重算增强版(约1-2分钟)。</div>
+
+  <div id="result" style="display:none;">
+    <div class="card">
+      <div class="reg-now">
+        <div id="reg-badge" class="reg-badge"></div>
+        <div class="reg-desc" id="reg-desc"></div>
+      </div>
+      <div id="rebalance-hint" class="rebal"></div>
+    </div>
+
+    <h2 class="sec">本季推荐持有篮子 <span class="badge-pro">增强版</span> <span class="muted" id="bask-meta"></span></h2>
+    <div class="bask-wrap">
+      <table class="tb">
+        <thead><tr>
+          <th class="l">#</th><th class="l">代码</th><th class="l">名称</th><th>综合分</th>
+          <th>PE</th><th>PB</th><th>市值(亿)</th>
+          <th>应计质量</th><th>EPS上修</th><th>挖掘分</th><th>龙头</th><th>52新高</th>
+        </tr></thead>
+        <tbody id="bask-rows"></tbody>
+      </table>
+    </div>
+    <div class="muted" style="margin-top:6px;">等权买入 + 卖等额沪深300股指期货对冲 = 纯 alpha。综合分 = 该腿主因子 + 正交叠加层。</div>
+
+    <h2 class="sec">历史战绩 (对冲后净超额, 增强版)</h2>
+    <div class="card"><div class="kpis" id="kpis"></div></div>
+    <div id="ad-chart"></div>
+    <h2 class="sec">分牛熊周期 <span class="muted">(蓝标=真样本外OOS)</span></h2>
+    <table class="tb" style="max-width:600px;">
+      <thead><tr><th class="l">周期</th><th>净超额/年</th><th>夏普</th><th class="l">主用腿</th><th>期数</th></tr></thead>
+      <tbody id="cyc-rows"></tbody>
+    </table>
+
+    <h2 class="sec">⚠️ 必读</h2>
+    <div class="warn"><ul id="caveat-rows"></ul></div>
+    <div class="muted" style="margin-top:10px;" id="foot"></div>
+  </div>
+</div>
+
+<script>
+const chart=echarts.init(document.getElementById("ad-chart"));
+window.addEventListener("resize",()=>chart.resize());
+const $status=document.getElementById("ad-status"),$btn=document.getElementById("refresh");
+let polling=null,lastCurve=null,curveTitle="净值曲线";
+function pct(x,d=1){return x==null?"-":`${x*100>=0?"+":""}${(x*100).toFixed(d)}%`}
+function cls(x){return (x||0)>=0?"up":"down"}
+function drawCurve(){if(!lastCurve)return;const cv=lastCurve;chart.setOption({animation:false,
+  title:{text:curveTitle,left:"center",textStyle:{color:"#cbd5e1",fontSize:13}},
+  tooltip:{trigger:"axis",valueFormatter:v=>v==null?"-":(+v).toFixed(3)},grid:{left:60,right:28,top:44,bottom:60},
+  xAxis:{type:"category",data:cv.dates,boundaryGap:false,axisLabel:{color:"#94a3b8"}},
+  yAxis:{type:"value",scale:true,axisLabel:{color:"#94a3b8"},splitLine:{lineStyle:{color:"#1e293b"}}},
+  dataZoom:[{type:"inside"},{type:"slider",bottom:18}],
+  series:[{name:"净超额",type:"line",data:cv.nav,showSymbol:false,smooth:true,lineStyle:{width:2.2,color:"#a855f7"},areaStyle:{color:"rgba(168,85,247,0.08)"}}]},true)}
+
+function render(d){
+  if(!d||!d.current||!d.track)return;
+  document.getElementById("empty").style.display="none";document.getElementById("result").style.display="block";
+  const c=d.current,t=d.track.summary;
+  const badge=document.getElementById("reg-badge");badge.className="reg-badge reg-"+c.regime;
+  badge.textContent=(c.regime==="VAL")?"价值腿":"动量腿";
+  document.getElementById("reg-desc").innerHTML=
+    `当前 <b>${c.regime_label}</b>;选中腿叠加正交层:<b>${c.overlay}</b>。<br>`+
+    `<span class="muted">数据截至 ${c.as_of} · 成分 ${c.members_date} · 估值 ${c.db_date||"-"} · 季频调仓</span>`;
+  const $rb=document.getElementById("rebalance-hint");
+  if(c.next_rebalance){const tgt=new Date(c.next_rebalance+"T00:00:00"),today=new Date();today.setHours(0,0,0,0);
+    const days=Math.round((tgt-today)/86400000);
+    if(days>0){$rb.className="rebal";$rb.innerHTML=`🗓️ 距下次建议调仓还有 <b>${days}</b> 天 (${c.next_rebalance})。期间安心持有,到点点刷新换仓。`;}
+    else{$rb.className="rebal due";$rb.innerHTML=`🗓️ <b>已到调仓时点</b> (${c.next_rebalance})。点上方刷新换仓。`;}}
+  document.getElementById("bask-meta").textContent=`(${c.basket_n}只·等权)`;
+  document.getElementById("bask-rows").innerHTML=(c.basket||[]).map((b,i)=>`
+    <tr><td class="l">${i+1}</td><td class="l">${b.code}</td><td class="l">${b.name||""}</td>
+      <td>${b.score!=null?b.score.toFixed(2):"-"}</td>
+      <td>${b.pe!=null?b.pe:"-"}</td><td>${b.pb!=null?b.pb:"-"}</td><td>${b.mv_yi!=null?b.mv_yi.toLocaleString():"-"}</td>
+      <td>${b["应计质量"]!=null?b["应计质量"]:"-"}</td><td>${b["EPS上修"]!=null?b["EPS上修"]:"-"}</td>
+      <td>${b["挖掘分"]!=null?b["挖掘分"]:"-"}</td><td>${b["龙头"]!=null?b["龙头"]:"-"}</td><td>${b["新高"]!=null?b["新高"]:"-"}</td></tr>`).join("");
+  document.getElementById("kpis").innerHTML=[
+    [`<span class="${cls(t.net_ann)}">${pct(t.net_ann)}</span>`,"净超额/年(对冲后)"],
+    [(t.sharpe??0).toFixed(2),"净夏普"],[pct(t.winrate,0),"季度胜率"],
+    [`${t.final_nav}倍`,`累计(${t.years}年)`],[t.n,"回测期数"]
+  ].map(([v,l])=>`<div class="kpi-box"><div class="v">${v}</div><div class="l">${l}</div></div>`).join("");
+  lastCurve=d.track.curve||{};curveTitle=`增强版 净超额净值曲线 (起点1.0 → ${t.final_nav}倍/${t.years}年)`;drawCurve();
+  setTimeout(()=>chart.resize(),0);requestAnimationFrame(()=>chart.resize());
+  document.getElementById("cyc-rows").innerHTML=(d.track.cycles||[]).map(x=>`
+    <tr><td class="l">${x.name}${x.oos?'<span class="oos">OOS</span>':''}</td>
+      <td class="${cls(x.net_ann)}">${pct(x.net_ann)}</td><td>${(x.sharpe??0).toFixed(2)}</td>
+      <td class="l"><span class="pill pill-${x.pick}">${x.pick==="VAL"?"价值":"动量"}</span></td><td>${x.n}</td></tr>`).join("");
+  document.getElementById("caveat-rows").innerHTML=(d.caveats||[]).map(s=>`<li>${s}</li>`).join("");
+  const p=d.params||{};
+  document.getElementById("foot").textContent=`策略: ${d.strategy} · 更新 ${d.updated_at} · 持有${p.hold_days}日/单边${(p.c_side*100).toFixed(2)}%/对冲费${(p.hedge_yr*100).toFixed(0)}%年`;
+}
+async function loadResult(){try{return await (await fetch("/api/advisor-pro/result")).json()}catch(e){return null}}
+async function poll(){const d=await loadResult();if(!d)return;const st=d.rd_status||{};
+  if(d.rd_pending||st.state==="running"){$status.textContent="⏳ "+(st.msg||"处理中...");return;}
+  clearInterval(polling);polling=null;$btn.disabled=false;
+  if(st.state==="error"){$status.textContent="❌ "+(st.msg||"失败");return;}
+  $status.textContent="✅ 已更新 · "+(d.updated_at||"");render(d);}
+document.getElementById("refresh").addEventListener("click",async()=>{
+  $btn.disabled=true;$status.textContent="提交中...";
+  try{const j=await (await fetch("/api/advisor-pro/request")).json();
+    if(!j.ok){$status.textContent="⚠️ "+j.message;$btn.disabled=false;return;}
+    $status.textContent="⏳ "+j.message;if(polling)clearInterval(polling);polling=setInterval(poll,4000);
+  }catch(e){$status.textContent="提交失败: "+e.message;$btn.disabled=false;}});
+(async()=>{const d=await loadResult();if(d&&d.current){render(d);$status.textContent="上次结果 · "+(d.updated_at||"");}})();
+</script>
+</body>
+</html>
