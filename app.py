@@ -1439,6 +1439,12 @@ def trade_page():
     return render_template("trade.html")
 
 
+@app.route("/track")
+def track_page():
+    """实盘跟踪/OOS验证页: 逐季已实现净超额台账 (复用 regime_advisor_pro.json 的 track.ledger)."""
+    return render_template("track.html")
+
+
 @app.route("/api/health")
 def health():
     return jsonify({

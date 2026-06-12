@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>quantinvest · 实盘跟踪</title>
+<link rel="stylesheet" href="/static/style.css"/>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<style>
+.tk-wrap{padding:10px;max-width:1000px}
+.card{background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:14px 16px;margin-bottom:14px}
+.kpis{display:flex;gap:28px;flex-wrap:wrap}.kpi-box{text-align:center}.kpi-box .v{font-size:22px;font-weight:700}.kpi-box .l{font-size:11px;color:#94a3b8}
+h2.sec{font-size:15px;margin:18px 0 8px}.muted{color:#64748b;font-size:12px}
+table.tb{width:100%;border-collapse:collapse;font-size:12px}
+table.tb th,table.tb td{padding:5px 10px;border-bottom:1px solid #1e293b;text-align:right}
+table.tb th{color:#94a3b8;background:#0f172a;position:sticky;top:0}table.tb td.l,table.tb th.l{text-align:left}
+.led-wrap{max-height:520px;overflow:auto;border:1px solid #1e293b;border-radius:8px}
+.pos{color:#f87171}.neg{color:#22c55e}
+.oos{font-size:10px;padding:1px 5px;border-radius:6px;background:#1e3a5f;color:#93c5fd}
+.ins{font-size:10px;padding:1px 5px;border-radius:6px;background:#3b0764;color:#e9d5ff}
+.pill-VAL{font-size:11px;padding:1px 7px;border-radius:10px;background:#0c2a1a;color:#34d399}
+.pill-MOM{font-size:11px;padding:1px 7px;border-radius:10px;background:#2a1408;color:#fb923c}
+#tk-chart{width:100%;height:320px}
+.warn{background:#1f1604;border:1px solid #92400e;color:#fcd34d;font-size:12px;padding:10px 14px;border-radius:8px;line-height:1.7;margin-top:12px}
+</style>
+</head>
+<body>
+<header class="screen-header">
+  <h1>📈 quantinvest</h1>
+  <nav class="topnav">
+    <a href="/">K线浏览</a><a href="/watchlist">自选股</a><a href="/screen">选股</a><a href="/pattern">杯柄形态</a>
+    <a href="/rdagent">RD-Agent因子</a><a href="/backtest">回测对比</a><a href="/strategy">单票策略</a>
+    <a href="/advisor">策略顾问</a><a href="/advisor-pro">策略顾问Pro</a><a href="/trade">下单执行</a><a href="/track" class="active">实盘跟踪</a>
+    <a href="/intraday">日内择时</a><a href="/tradingagents">TradingAgents分析</a>
+  </nav>
+  <div class="meta">逐季 已实现净超额台账 · 2017-21=样本内(回测) / 2022起=OOS(更可信) / 未来真实调仓续上</div>
+</header>
+
+<div class="tk-wrap">
+  <div id="empty" class="muted" style="padding:20px;">还没有数据。去「策略顾问Pro」点重算生成。</div>
+  <div id="result" style="display:none;">
+    <div class="card"><div class="kpis" id="kpis"></div></div>
+    <div class="card"><div id="tk-chart"></div></div>
+    <h2 class="sec">逐季台账 <span class="muted" id="led-meta"></span></h2>
+    <div class="led-wrap"><table class="tb">
+      <thead><tr><th class="l">调仓日</th><th class="l">退出日</th><th class="l">腿</th><th>本期净超额</th><th>累计净值</th><th class="l">阶段</th></tr></thead>
+      <tbody id="led-rows"></tbody></table></div>
+    <div class="warn" id="caveat"></div>
+  </div>
+</div>
+
+<script>
+function pct(x){return (x>=0?"+":"")+(x*100).toFixed(2)+"%";}
+async function load(){
+  let d; try{ d=await (await fetch("/api/advisor-pro/result")).json(); }catch(e){ return; }
+  const tk=d.track||{}; const led=tk.ledger; const s=tk.summary;
+  if(!led||!led.length){ document.getElementById("empty").style.display="block"; document.getElementById("result").style.display="none"; return; }
+  document.getElementById("empty").style.display="none"; document.getElementById("result").style.display="block";
+  const oos=led.filter(x=>x.oos);
+  let oosCum=1; oos.forEach(x=>oosCum*=(1+x.net));
+  document.getElementById("kpis").innerHTML=
+    '<div class="kpi-box"><div class="v">'+pct(s.net_ann)+'</div><div class="l">全样本净超额/年</div></div>'+
+    '<div class="kpi-box"><div class="v">'+s.sharpe.toFixed(2)+'</div><div class="l">夏普</div></div>'+
+    '<div class="kpi-box"><div class="v">'+(s.winrate*100).toFixed(0)+'%</div><div class="l">胜率</div></div>'+
+    '<div class="kpi-box"><div class="v">'+s.final_nav+'倍</div><div class="l">'+s.years+'年累计净值</div></div>'+
+    '<div class="kpi-box"><div class="v">'+oosCum.toFixed(2)+'倍</div><div class="l">OOS(2022起)累计</div></div>';
+  document.getElementById("led-meta").textContent="共 "+led.length+" 期";
+  document.getElementById("led-rows").innerHTML=led.slice().reverse().map(x=>
+    `<tr><td class="l">${x.d}</td><td class="l">${x.dx}</td><td class="l"><span class="pill-${x.pick}">${x.pick}</span></td>`+
+    `<td class="${x.net>=0?'pos':'neg'}">${pct(x.net)}</td><td>${x.cum}</td>`+
+    `<td class="l">${x.oos?'<span class="oos">OOS</span>':'<span class="ins">样本内</span>'}</td></tr>`).join("");
+  const ch=echarts.init(document.getElementById("tk-chart"),"dark");
+  ch.setOption({backgroundColor:"transparent",grid:{left:50,right:20,top:20,bottom:30},
+    xAxis:{type:"category",data:led.map(x=>x.dx),axisLabel:{fontSize:9}},yAxis:{type:"value",scale:true},
+    tooltip:{trigger:"axis"},series:[{type:"line",data:led.map(x=>x.cum),showSymbol:false,smooth:true,lineStyle:{width:2,color:"#a855f7"},areaStyle:{color:"rgba(168,85,247,0.08)"}}]});
+  document.getElementById("caveat").innerHTML="⚠️ 2017-21 为样本内(回测,偏乐观);<b>2022起 OOS 段才是更可信的检验</b>。每期=对冲后净超额(纯alpha)。<br>这是回测回填的台账;系统已开始记录每季真实推荐篮子(_basket_history),未来真实调仓的已实现收益会续在这里 → 逐步形成真·实盘OOS战绩。";
+}
+load(); setInterval(load,60000);
+</script>
+</body>
+</html>
