@@ -81,6 +81,13 @@ table.tb th{color:#94a3b8;background:#0f172a;position:sticky;top:0}table.tb td.l
       <tbody id="cyc-rows"></tbody>
     </table>
 
+    <h2 class="sec">💰 容量/成本精算 <span class="muted" id="cap-meta"></span></h2>
+    <table class="tb" style="max-width:520px;">
+      <thead><tr><th class="l">资金量</th><th>往返成本</th><th>年化拖累</th></tr></thead>
+      <tbody id="cap-rows"></tbody>
+    </table>
+    <div class="muted" style="margin-top:6px">大盘股ADV巨大→冲击极小;成本随资金缓增,容量充裕。回测用20bps偏保守。</div>
+
     <h2 class="sec">⚠️ 必读</h2>
     <div class="warn"><ul id="caveat-rows"></ul></div>
     <div class="muted" style="margin-top:10px;" id="foot"></div>
@@ -134,6 +141,9 @@ function render(d){
     <tr><td class="l">${x.name}${x.oos?'<span class="oos">OOS</span>':''}</td>
       <td class="${cls(x.net_ann)}">${pct(x.net_ann)}</td><td>${(x.sharpe??0).toFixed(2)}</td>
       <td class="l"><span class="pill pill-${x.pick}">${x.pick==="VAL"?"价值":"动量"}</span></td><td>${x.n}</td></tr>`).join("");
+  const cap=d.capacity||{};
+  document.getElementById("cap-meta").textContent=cap.adv_med_yi?`(篮子ADV中位 ${cap.adv_med_yi}亿/日, 固定费${cap.fixed_rt_bps}bps)`:"";
+  document.getElementById("cap-rows").innerHTML=(cap.rows||[]).map(r=>`<tr><td class="l">${r.cap}</td><td>${r.rt_bps} bps</td><td>${r.drag_pct}%</td></tr>`).join("");
   document.getElementById("caveat-rows").innerHTML=(d.caveats||[]).map(s=>`<li>${s}</li>`).join("");
   const p=d.params||{};
   document.getElementById("foot").textContent=`策略: ${d.strategy} · 更新 ${d.updated_at} · 持有${p.hold_days}日/单边${(p.c_side*100).toFixed(2)}%/对冲费${(p.hedge_yr*100).toFixed(0)}%年`;
