@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>quantinvest · 下单执行</title>
+<link rel="stylesheet" href="/static/style.css"/>
+<style>
+.tr-wrap{padding:10px;max-width:1050px}
+.tr-bar{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px}
+.tr-bar button{font-size:13px;padding:5px 14px}#tr-status{color:#94a3b8;font-size:12px}
+.card{background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:14px 16px;margin-bottom:14px}
+.reg-badge{font-size:24px;font-weight:700;padding:8px 18px;border-radius:10px}
+.reg-VAL{background:#0c2a1a;color:#34d399;border:1px solid #14532d}.reg-MOM{background:#2a1408;color:#fb923c;border:1px solid #7c2d12}
+.rebal{margin-top:10px;padding:8px 14px;border-radius:8px;font-size:13px;background:#0b1220;border:1px solid #1e293b;color:#cbd5e1}.rebal.due{background:#1f1604;border-color:#92400e;color:#fcd34d}
+.sum{display:flex;gap:24px;flex-wrap:wrap;margin:6px 0 2px}.sum .b{font-size:13px;color:#cbd5e1}.sum .b b{font-size:20px}
+h2.sec{font-size:15px;margin:18px 0 8px}
+table.tb{width:100%;border-collapse:collapse;font-size:13px}
+table.tb th,table.tb td{padding:6px 10px;border-bottom:1px solid #1e293b;text-align:right}
+table.tb th{color:#94a3b8;background:#0f172a}table.tb td.l,table.tb th.l{text-align:left}
+.buy h2{color:#f87171}.sell h2{color:#34d399}.hold h2{color:#94a3b8}
+.no{color:#fcd34d;font-size:11px;background:#1f1604;border:1px solid #92400e;padding:1px 6px;border-radius:6px}
+.ok{color:#22c55e;font-size:11px}
+.warn{background:#1f1604;border:1px solid #92400e;color:#fcd34d;font-size:12px;padding:10px 14px;border-radius:8px;line-height:1.7;margin-top:14px}
+.muted{color:#64748b;font-size:12px}
+</style>
+</head>
+<body>
+<header class="screen-header">
+  <h1>📈 quantinvest</h1>
+  <nav class="topnav">
+    <a href="/">K线浏览</a><a href="/watchlist">自选股</a><a href="/screen">选股</a><a href="/pattern">杯柄形态</a>
+    <a href="/rdagent">RD-Agent因子</a><a href="/backtest">回测对比</a><a href="/strategy">单票策略</a>
+    <a href="/advisor">策略顾问</a><a href="/advisor-pro">策略顾问Pro</a><a href="/trade" class="active">下单执行</a>
+    <a href="/intraday">日内择时</a><a href="/tradingagents">TradingAgents分析</a>
+  </nav>
+  <div class="meta">沪深300 季频对冲策略 · 本季 <b>买入/卖出/继续持有</b> 清单(派生自策略顾问Pro篮子)</div>
+</header>
+
+<div class="tr-wrap">
+  <div class="tr-bar">
+    <button id="refresh">🔄 拉最新数据·重算</button><span id="tr-status"></span>
+  </div>
+  <div id="empty" class="muted" style="padding:20px;">还没有结果。先去「策略顾问Pro」点重算,或在此点「🔄」。</div>
+
+  <div id="result" style="display:none;">
+    <div class="card">
+      <div style="display:flex;align-items:center;gap:18px;flex-wrap:wrap">
+        <div id="reg-badge" class="reg-badge"></div>
+        <div id="reg-desc" class="muted" style="font-size:13px"></div>
+      </div>
+      <div id="rebal" class="rebal"></div>
+      <div class="sum" id="sum"></div>
+    </div>
+
+    <div class="buy"><h2 class="sec">🟢 买入清单 <span class="muted" id="buy-meta"></span></h2>
+      <table class="tb"><thead><tr><th class="l">代码</th><th class="l">名称</th><th>目标权重</th><th class="l">可买?</th></tr></thead><tbody id="buy-rows"></tbody></table></div>
+
+    <div class="sell"><h2 class="sec">🔴 卖出清单 <span class="muted" id="sell-meta"></span></h2>
+      <table class="tb"><thead><tr><th class="l">代码</th><th class="l">名称</th><th class="l">动作</th></tr></thead><tbody id="sell-rows"></tbody></table></div>
+
+    <div class="hold"><h2 class="sec">⚪ 继续持有 <span class="muted" id="hold-meta"></span></h2>
+      <table class="tb"><thead><tr><th class="l">代码</th><th class="l">名称</th><th>目标权重</th></tr></thead><tbody id="hold-rows"></tbody></table></div>
+
+    <div class="warn" id="caveat"></div>
+  </div>
+</div>
+
+<script>
+function pct(x){return (x*100).toFixed(1)+"%";}
+async function load(){
+  let d; try{ d=await (await fetch("/api/advisor-pro/result")).json(); }catch(e){ return; }
+  const t=d.trade;
+  if(!t || !t.items){ document.getElementById("empty").style.display="block"; document.getElementById("result").style.display="none"; return; }
+  document.getElementById("empty").style.display="none"; document.getElementById("result").style.display="block";
+  const reg=t.regime||(d.current&&d.current.regime)||"";
+  const rb=document.getElementById("reg-badge"); rb.textContent=(reg==="VAL"?"VAL 价值/防御腿":"MOM 动量/进攻腿"); rb.className="reg-badge "+(reg==="VAL"?"reg-VAL":"reg-MOM");
+  document.getElementById("reg-desc").innerHTML=(d.current&&d.current.overlay?("正交叠加: "+d.current.overlay):"");
+  const reb=document.getElementById("rebal");
+  reb.innerHTML="数据日 <b>"+(t.as_of||"")+"</b> · 下次调仓 <b>"+(t.next_rebalance||"")+"</b> · 上次清单 "+(t.prev_date||"无(首次)");
+  document.getElementById("sum").innerHTML=
+    '<div class="b">买入 <b style="color:#f87171">'+t.n_buy+'</b> 只</div>'+
+    '<div class="b">卖出 <b style="color:#34d399">'+t.n_sell+'</b> 只</div>'+
+    '<div class="b">持有 <b style="color:#94a3b8">'+t.n_hold+'</b> 只</div>'+
+    '<div class="b">每股目标权重 <b>'+pct(t.weight_each)+'</b></div>';
+  const buy=t.items.filter(i=>i.action==="买入"), sell=t.items.filter(i=>i.action==="卖出"), hold=t.items.filter(i=>i.action==="持有");
+  document.getElementById("buy-meta").textContent="("+buy.length+"只新进)";
+  document.getElementById("sell-meta").textContent="("+sell.length+"只剔出)";
+  document.getElementById("hold-meta").textContent="("+hold.length+"只续持)";
+  document.getElementById("buy-rows").innerHTML=buy.map(i=>`<tr><td class="l">${i.code}</td><td class="l">${i.name}</td><td>${pct(i.weight)}</td><td class="l">${i.buyable?'<span class="ok">✓可买</span>':'<span class="no">'+i.flags.join("/")+' 今日不可买</span>'}</td></tr>`).join("")||'<tr><td class="l muted" colspan=4>无</td></tr>';
+  document.getElementById("sell-rows").innerHTML=sell.map(i=>`<tr><td class="l">${i.code}</td><td class="l">${i.name}</td><td class="l">清仓</td></tr>`).join("")||'<tr><td class="l muted" colspan=3>无(上季无记录或无剔出)</td></tr>';
+  document.getElementById("hold-rows").innerHTML=hold.map(i=>`<tr><td class="l">${i.code}</td><td class="l">${i.name}</td><td>${pct(i.weight)}</td></tr>`).join("")||'<tr><td class="l muted" colspan=3>无</td></tr>';
+  document.getElementById("caveat").innerHTML="⚠️ 季频信号(非日内择时):每季调仓日按此换仓,不盯盘。<br>权重为大致等权,可按资金微调。「今日不可买」(涨停/停牌/ST)请改日补买或剔除。<br>多头版=买这些当沪深300指数增强(承担市场涨跌);对冲版需另做空IF期货才是回测的市场中性alpha。盈亏自负,建议先模拟盘。";
+}
+document.getElementById("refresh").onclick=async()=>{
+  document.getElementById("tr-status").textContent="已通知PC重算(约1-2分钟)...";
+  try{ const r=await (await fetch("/api/advisor-pro/request")).json(); document.getElementById("tr-status").textContent=r.message||""; }catch(e){}
+};
+load(); setInterval(load,30000);
+</script>
+</body>
+</html>

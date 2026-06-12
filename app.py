@@ -1433,6 +1433,12 @@ def api_advisor_pro_request():
     return jsonify({"ok": True, "message": "已通知 PC: 刷新策略顾问Pro (重算增强版, 约1-2分钟)"})
 
 
+@app.route("/trade")
+def trade_page():
+    """下单执行页: 从策略顾问Pro的篮子派生 买入/卖出/持有 清单 (复用 regime_advisor_pro.json 的 trade 字段)."""
+    return render_template("trade.html")
+
+
 @app.route("/api/health")
 def health():
     return jsonify({
