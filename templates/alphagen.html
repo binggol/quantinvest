@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>AlphaGen RL挖掘 · quantinvest</title>
+<link rel="stylesheet" href="/static/style.css"/>
+<style>
+  .wrap{max-width:1000px;margin:0 auto;padding:16px}
+  .hd{font-size:21px;font-weight:700;margin:6px 0 2px}
+  .sub{color:#94a3b8;line-height:1.7;margin-bottom:14px;font-size:13px}
+  .upd{color:#64748b;font-size:12px}
+  .card{background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:12px 14px;margin-bottom:14px}
+  table{border-collapse:collapse;width:100%;font-size:12px;margin-top:6px}
+  th,td{border:1px solid #1e293b;padding:4px 8px;text-align:right}
+  th:first-child,td:first-child{text-align:left}
+  th{background:#111827;color:#94a3b8;font-weight:600}
+  .btn{background:#1d4ed8;color:#fff;border:0;border-radius:8px;padding:9px 18px;font-size:14px;font-weight:600;cursor:pointer}
+  .btn:hover{background:#2563eb} .btn:disabled{background:#475569;cursor:not-allowed}
+  .opt{color:#94a3b8;font-size:12px;margin:0 8px}
+  .opt input,.opt select{background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:5px;padding:3px 6px}
+  .pass{color:#34d399;font-weight:700} .fail{color:#f87171}
+  .msg{margin-top:8px;font-size:12.5px;color:#fbbf24}
+  .note{background:#1a2433;border:1px solid #2a4a6a;border-radius:8px;padding:10px 13px;color:#cbd5e1;font-size:12.5px;line-height:1.7;margin-top:12px}
+  .redund{color:#94a3b8;font-size:11px}
+</style>
+</head>
+<body>
+  <nav class="topnav">
+    <a href="/">K线浏览</a><a href="/watchlist">自选股</a><a href="/screen">选股</a><a href="/pattern">杯柄形态</a>
+    <a href="/rdagent">RD-Agent因子</a><a href="/alphagen" class="active">AlphaGen挖掘</a><a href="/backtest">回测对比</a><a href="/strategy">单票策略</a>
+    <a href="/advisor">策略顾问</a><a href="/advisor-pro">策略顾问Pro</a><a href="/trade">下单执行</a><a href="/track">实盘跟踪</a>
+    <a href="/research">研究台</a><a href="/runup">业绩抢跑</a><a href="/rsrs">RSRS择时</a><a href="/intraday">日内择时</a><a href="/tradingagents">TradingAgents分析</a>
+  </nav>
+  <details class="usage"><summary>ℹ️ 这个页面怎么用</summary><div>RL(强化学习)在全市场自动挖<b>公式alpha池</b>(一组互相关受控的因子),自动筛 against 你的饱和base看有没有<b>正交增量</b>(gain>0且maxcorr<0.5)。点「🚀开始挖掘」→ 请求发到PC、<b>GPU训练约30-60分钟</b>→本页自动出结果。<span class="w">预期</span>:同公式空间,WQ101/Alpha191/Alpha158(200+标准因子)已证0正交,这里大概率同命,作SOTA自动搜索的对照。过关者(尤其加权组合)才值得走对冲关卡。</div></details>
+  <div class="wrap">
+    <div class="hd">🧬 AlphaGen · RL 自动因子挖掘</div>
+    <div class="upd" id="upd">—</div>
+    <div class="card">
+      <button class="btn" id="run" onclick="runMine()">🚀 开始挖掘</button>
+      <span class="opt">步数 <input id="steps" type="number" value="100000" style="width:80px"></span>
+      <span class="opt">universe
+        <select id="inst"><option value="all">全市场</option><option value="csi300">沪深300</option></select></span>
+      <span class="opt">池容量 <input id="cap" type="number" value="10" style="width:50px"></span>
+      <span class="opt"><label><input type="checkbox" id="llm"> LLM增强(NIM minimax-m3)</label></span>
+      <div class="msg" id="msg"></div>
+    </div>
+    <div id="content">加载中…</div>
+  </div>
+<script>
+function fmt(x){return (x>=0?'+':'')+x.toFixed(4);}
+function load(){
+  fetch("/api/alphagen").then(r=>r.json()).then(d=>{
+    document.getElementById("upd").textContent = (d.pool? "池: "+d.pool+" · ":"") + "base_ic="+(d.base_ic||"-") + (d.pending?" · ⏳ PC挖掘中…":"");
+    const btn=document.getElementById("run");
+    btn.disabled = !!d.pending; btn.textContent = d.pending? "⏳ 挖掘中(GPU 30-60min)…" : "🚀 开始挖掘";
+    let h="";
+    if(d.message && (!d.alphas||!d.alphas.length)){ h=`<div class="card">${d.message}</div>`; }
+    else if(d.alphas&&d.alphas.length){
+      const np=d.n_pass||0;
+      h+=`<div class="card"><b>过关(gain&gt;0.003 且 maxcorr&lt;0.5): <span class="${np>0?'pass':'fail'}">${np} / ${d.alphas.length}</span></b>`;
+      h+=`<table><thead><tr><th>alpha 公式</th><th>ic60</th><th>gain</th><th>maxcorr</th><th>冗余于</th></tr></thead><tbody>`;
+      h+=d.alphas.map(a=>{
+        const pass=a.gain>0.003&&Math.abs(a.maxcorr)<0.5;
+        const nm=a.expr==="__COMBO__"?"★ 加权组合(整个池)":a.expr;
+        return `<tr><td title="${a.expr}">${nm.length>52?nm.slice(0,52)+'…':nm}</td><td>${(a.ic60>=0?'+':'')+a.ic60}</td>
+          <td class="${pass?'pass':''}">${fmt(a.gain)}</td><td>${a.maxcorr}</td><td class="redund">${a.redundant_with||'-'}</td></tr>`;
+      }).join("");
+      h+=`</tbody></table></div>`;
+    }
+    document.getElementById("content").innerHTML=h;
+  }).catch(e=>{document.getElementById("content").innerHTML="加载失败: "+e;});
+}
+function runMine(){
+  const body={steps:+document.getElementById("steps").value,instruments:document.getElementById("inst").value,
+              pool_capacity:+document.getElementById("cap").value,use_llm:document.getElementById("llm").checked};
+  document.getElementById("msg").textContent="提交中…";
+  fetch("/api/alphagen/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})
+    .then(r=>r.json()).then(d=>{document.getElementById("msg").textContent=d.message||"";load();})
+    .catch(e=>{document.getElementById("msg").textContent="提交失败: "+e;});
+}
+load(); setInterval(load, 30000);  // 每30秒自动刷新(挖掘中可看到完成)
+</script>
+</body>
+</html>
