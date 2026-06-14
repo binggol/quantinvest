@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>RSRS指数择时 · quantinvest</title>
+<link rel="stylesheet" href="/static/style.css"/>
+<style>
+  .wrap{max-width:1000px;margin:0 auto;padding:16px}
+  .hd{font-size:21px;font-weight:700;margin:6px 0 2px}
+  .sub{color:#94a3b8;line-height:1.7;margin-bottom:14px;font-size:13px}
+  .upd{color:#64748b;font-size:12px}
+  .cards{display:flex;gap:14px;flex-wrap:wrap}
+  .card{background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:14px 16px;margin-bottom:14px;flex:1;min-width:300px}
+  .iname{font-size:16px;font-weight:700}
+  .state{font-size:30px;font-weight:800;margin:8px 0 4px}
+  .hold{color:#34d399} .flat{color:#f87171}
+  .metrics{color:#94a3b8;font-size:12.5px;line-height:1.9}
+  .metrics b{color:#cbd5e1}
+  .flip{display:inline-block;font-size:11px;padding:1px 8px;border-radius:10px;background:#7c2d12;color:#fdba74;margin-left:6px}
+  table{border-collapse:collapse;width:100%;font-size:12px;margin-top:8px}
+  th,td{border:1px solid #1e293b;padding:4px 8px;text-align:right}
+  th:first-child,td:first-child{text-align:left}
+  th{background:#111827;color:#94a3b8;font-weight:600}
+  .note{background:#1a2433;border:1px solid #2a4a6a;border-radius:8px;padding:10px 13px;color:#cbd5e1;font-size:12.5px;line-height:1.7;margin-top:12px}
+  .warn{color:#fbbf24}
+</style>
+</head>
+<body>
+  <nav class="topnav">
+    <a href="/">K线浏览</a><a href="/watchlist">自选股</a><a href="/screen">选股</a><a href="/pattern">杯柄形态</a>
+    <a href="/rdagent">RD-Agent因子</a><a href="/backtest">回测对比</a><a href="/strategy">单票策略</a>
+    <a href="/advisor">策略顾问</a><a href="/advisor-pro">策略顾问Pro</a><a href="/trade">下单执行</a><a href="/track">实盘跟踪</a>
+    <a href="/research">研究台</a><a href="/runup">业绩抢跑</a><a href="/rsrs" class="active">RSRS择时</a><a href="/intraday">日内择时</a><a href="/tradingagents">TradingAgents分析</a>
+  </nav>
+  <div class="wrap"><div id="content">加载中…</div></div>
+<script>
+function track(rows){
+  if(!rows||!rows.length) return '';
+  rows=rows.slice(-12).reverse();
+  let h="<table><thead><tr><th>日期</th><th>修正标准分</th><th>信号</th><th>收盘</th></tr></thead><tbody>";
+  h+=rows.map(r=>`<tr><td>${r.date}</td><td>${r.score}</td><td style="color:${r.state==='持有'?'#34d399':'#f87171'}">${r.state}</td><td>${r.close}</td></tr>`).join("");
+  return h+"</tbody></table>";
+}
+fetch("/api/rsrs").then(r=>r.json()).then(d=>{
+  let h=`<div class="hd">🧭 RSRS 阻力支撑相对强度 · 指数择时</div><div class="upd">更新 ${d.updated||"-"}</div>`;
+  h+=`<div class="sub">${d.strategy||""}　|　参数 N=${(d.params||{}).N} M=${(d.params||{}).M} 阈值=${(d.params||{}).threshold}（${(d.params||{}).mode||""}）</div>`;
+  if(!d.indices||!d.indices.length){ h+=`<div class="card">${d.message||"暂无信号"}</div>`; }
+  else{
+    h+=`<div class="cards">`;
+    h+=d.indices.map(x=>{
+      const cls=x.state==='持有'?'hold':'flat';
+      return `<div class="card"><div class="iname">${x.name} <span style="color:#64748b;font-size:12px">${x.code}</span>${x.flip?'<span class="flip">↻ 今日翻转</span>':''}</div>
+        <div class="state ${cls}">${x.state==='持有'?'🟢 持有':'🔴 空仓'}</div>
+        <div class="metrics">修正标准分 <b>${x.score}</b>（>${(d.params||{}).threshold} 持有）<br>
+        斜率β <b>${x.beta}</b>　R² <b>${x.r2}</b><br>截至 <b>${x.as_of}</b></div>
+        ${track(x.track)}</div>`;
+    }).join("");
+    h+=`</div>`;
+  }
+  if(d.note) h+=`<div class="note"><span class="warn">⚠️ </span>${d.note}</div>`;
+  document.getElementById("content").innerHTML=h;
+}).catch(e=>{document.getElementById("content").innerHTML=`加载失败: ${e}`;});
+</script>
+</body>
+</html>
