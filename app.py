@@ -54,6 +54,7 @@ REGIME_ADVISOR = PREDICT_JSON.parent / "regime_advisor.json"    # 策略顾问: 
 REGIME_ADVISOR_PRO = PREDICT_JSON.parent / "regime_advisor_pro.json"  # 策略顾问Pro: 增强版(regime+正交选股) (PC 写)
 RESEARCH_LOG = PREDICT_JSON.parent / "research_log.json"  # 研究台: 因子/策略调查结论 (PC export_research.py 写)
 RUNUP_JSON = PREDICT_JSON.parent / "runup.json"  # 抢跑第二sleeve: 每日预增抢跑买/卖/观察清单 (PC export_runup.py 写)
+REPO_JSON = PREDICT_JSON.parent / "repo.json"  # 回购第四sleeve: 回购公告后持有60日 每日清单 (PC export_repo.py 写)
 RSRS_JSON = PREDICT_JSON.parent / "rsrs.json"  # RSRS指数择时(独立方向信号, 不并入三腿中性组合) (PC export_rsrs.py 写)
 ALPHAGEN_RESULT = PREDICT_JSON.parent / "alphagen_result.json"  # AlphaGen RL挖掘的alpha池 + 对base筛结果 (PC alphagen_listener.py 写)
 ALPHAGEN_REQUEST = PREDICT_JSON.parent / "alphagen_request.json"  # 网页按钮触发: PC GPU上跑挖掘+评估
@@ -1550,6 +1551,21 @@ def api_rdquant_run():
     RDQUANT_REQUEST.parent.mkdir(parents=True, exist_ok=True)
     RDQUANT_REQUEST.write_text(json.dumps(req, ensure_ascii=False), encoding="utf-8")
     return jsonify({"ok": True, "message": "已提交; RD-Agent-Quant 每轮约 20-40 分钟(LLM+docker回测), 完成后本页自动刷新", "request": req})
+
+
+@app.route("/repo")
+def repo_page():
+    """回购事件腿(第四sleeve): 中证1000成分 回购公告后持有60交易日 每日清单。"""
+    return render_template("repo.html")
+
+
+@app.route("/api/repo")
+def api_repo():
+    data = _read_json(REPO_JSON)
+    if data is None:
+        return jsonify({"updated": "", "holdings": [], "buy_today": [],
+                        "message": "尚无回购清单; PC 端运行 export_repo.py 生成 repo.json"})
+    return jsonify(data)
 
 
 @app.route("/trade")

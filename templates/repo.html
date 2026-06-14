@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>回购事件腿 · quantinvest</title>
+<link rel="stylesheet" href="/static/style.css"/>
+<style>
+  .wrap{max-width:1000px;margin:0 auto;padding:16px}
+  .hd{font-size:21px;font-weight:700;margin:6px 0 2px}
+  .sub{color:#94a3b8;line-height:1.7;margin-bottom:14px;font-size:13px}
+  .upd{color:#64748b;font-size:12px}
+  .card{background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:12px 14px;margin-bottom:14px}
+  table{border-collapse:collapse;width:100%;font-size:12.5px}
+  th,td{border:1px solid #1e293b;padding:5px 9px;text-align:right}
+  th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}
+  th{background:#111827;color:#94a3b8;font-weight:600}
+  .buy h3{color:#34d399} .sell h3{color:#f87171}
+  .tag{font-size:11px;padding:1px 7px;border-radius:10px;background:#1e293b;color:#cbd5e1}
+  .empty{color:#94a3b8;padding:10px;font-size:13px}
+  .note{background:#1a2433;border:1px solid #2a4a6a;border-radius:8px;padding:10px 13px;color:#cbd5e1;font-size:12.5px;line-height:1.7;margin-top:12px}
+  .warn{color:#fbbf24}
+</style>
+</head>
+<body>
+  <nav class="topnav">
+    <a href="/">K线浏览</a><a href="/watchlist">自选股</a><a href="/screen">选股</a><a href="/pattern">杯柄形态</a>
+    <a href="/rdagent">RD-Agent因子</a><a href="/alphagen">AlphaGen挖掘</a><a href="/rdquant">RD-Agent-Quant</a><a href="/backtest">回测对比</a><a href="/strategy">单票策略</a>
+    <a href="/advisor">策略顾问</a><a href="/advisor-pro">策略顾问Pro</a><a href="/trade">下单执行</a><a href="/track">实盘跟踪</a>
+    <a href="/research">研究台</a><a href="/runup">业绩抢跑</a><a href="/repo" class="active">回购腿</a><a href="/rsrs">RSRS择时</a><a href="/intraday">日内择时</a><a href="/tradingagents">TradingAgents分析</a>
+  </nav>
+  <details class="usage"><summary>ℹ️ 这个页面怎么用</summary><div>【<span class="k">第四sleeve</span>】回购事件腿。中证1000成分股<b>发布回购公告后建仓、持有60交易日、指数对冲、等权</b>。慢漂移(CAR[+1,+60]+2.07%/t=11.4)、低换手、容量大。<b>与三腿近零相关</b>(0.02/−0.01/0.10),配20%把组合夏普2.06→2.34。今日建仓照单买入(自查停牌/涨停),持满60交易日平仓。</div></details>
+  <div class="wrap"><div id="content">加载中…</div></div>
+<script>
+function tbl(rows, cols){
+  if(!rows||!rows.length) return '<div class="empty">— 无 —</div>';
+  let h="<table><thead><tr>"+cols.map(c=>`<th>${c[0]}</th>`).join("")+"</tr></thead><tbody>";
+  h+=rows.map(r=>"<tr>"+cols.map(c=>`<td>${c[1](r)}</td>`).join("")+"</tr>").join("");
+  return h+"</tbody></table>";
+}
+fetch("/api/repo").then(r=>r.json()).then(d=>{
+  let h=`<div class="hd">🔁 回购事件腿 · 第四sleeve</div><div class="upd">更新 ${d.updated||"-"} · 今日 ${d.today||"-"} · 当前持仓 ${d.n_holdings||0} 只</div>`;
+  h+=`<div class="sub">${d.strategy||""}</div>`;
+  const cols=[["代码",r=>r.code],["名称",r=>r.name],["回购公告",r=>`<span class="tag">${r.proc||""}</span>`],["公告日",r=>r.ann_date],["已持有(交易日)",r=>r.held_td],["距平仓",r=>r.to_close]];
+  if((d.holdings||[]).length===0){
+    h+=`<div class="card"><div class="empty">当前无回购持仓。回购公告全年都有,通常市场低迷期更密集。</div></div>`;
+  }else{
+    h+=`<div class="card buy"><h3>🟢 今日建仓 (${(d.buy_today||[]).length}只)</h3>${tbl(d.buy_today,cols)}</div>`;
+    h+=`<div class="card sell"><h3>🔴 临近平仓·持满60日 (${(d.sell_soon||[]).length}只)</h3>${tbl(d.sell_soon,cols)}</div>`;
+    h+=`<div class="card"><h3 style="color:#60a5fa">📋 当前全部持仓 (${d.n_holdings}只)</h3>${tbl((d.holdings||[]).slice(0,200),cols)}</div>`;
+  }
+  if(d.note) h+=`<div class="note"><span class="warn">⚠️ </span>${d.note}</div>`;
+  document.getElementById("content").innerHTML=h;
+}).catch(e=>{document.getElementById("content").innerHTML=`加载失败: ${e}`;});
+</script>
+</body>
+</html>
