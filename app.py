@@ -57,6 +57,8 @@ RUNUP_JSON = PREDICT_JSON.parent / "runup.json"  # 抢跑第二sleeve: 每日预
 RSRS_JSON = PREDICT_JSON.parent / "rsrs.json"  # RSRS指数择时(独立方向信号, 不并入三腿中性组合) (PC export_rsrs.py 写)
 ALPHAGEN_RESULT = PREDICT_JSON.parent / "alphagen_result.json"  # AlphaGen RL挖掘的alpha池 + 对base筛结果 (PC alphagen_listener.py 写)
 ALPHAGEN_REQUEST = PREDICT_JSON.parent / "alphagen_request.json"  # 网页按钮触发: PC GPU上跑挖掘+评估
+RDQUANT_RESULT = PREDICT_JSON.parent / "rdquant_result.json"  # RD-Agent-Quant(fin_quant)因子+模型联合优化 逐轮回测指标 (PC pc_listener.py 写)
+RDQUANT_REQUEST = PREDICT_JSON.parent / "rdquant_request.json"  # 网页按钮触发: PC 上 rdagent fin_quant
 WATCHLIST_JSON = Path(STOCK_META_DB).parent / "watchlist.json"  # 自选股 (持久卷 /app/data)
 TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN", "")
 DAILY_HOUR = int(os.environ.get("DAILY_UPDATE_HOUR", "21"))
@@ -1512,6 +1514,33 @@ def api_alphagen_run():
     ALPHAGEN_REQUEST.parent.mkdir(parents=True, exist_ok=True)
     ALPHAGEN_REQUEST.write_text(json.dumps(req, ensure_ascii=False), encoding="utf-8")
     return jsonify({"ok": True, "message": "已提交挖掘任务; PC GPU 训练约 30-60 分钟, 完成后本页自动刷新结果", "request": req})
+
+
+@app.route("/rdquant")
+def rdquant_page():
+    """RD-Agent-Quant: LLM多agent 因子+模型联合优化 (rdagent fin_quant), 展示逐轮 qlib 回测指标."""
+    return render_template("rdquant.html")
+
+
+@app.route("/api/rdquant")
+def api_rdquant():
+    data = _read_json(RDQUANT_RESULT)
+    if data is None:
+        data = {"loops": [], "message": "尚无结果; 点「开始优化」或 PC 端 pc_listener.py 处理"}
+    data["pending"] = RDQUANT_REQUEST.exists()
+    return jsonify(data)
+
+
+@app.route("/api/rdquant/run", methods=["POST"])
+def api_rdquant_run():
+    """网页按钮触发: 写请求文件, PC 上 pc_listener.py 监听到后跑 rdagent fin_quant (LLM+docker, 每轮约20-40分钟)。"""
+    if RDQUANT_REQUEST.exists():
+        return jsonify({"ok": False, "message": "已有 RD-Agent-Quant 任务在排队/处理中"})
+    body = request.get_json(silent=True) or {}
+    req = {"requested_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "loop_n": int(body.get("loop_n", 2))}
+    RDQUANT_REQUEST.parent.mkdir(parents=True, exist_ok=True)
+    RDQUANT_REQUEST.write_text(json.dumps(req, ensure_ascii=False), encoding="utf-8")
+    return jsonify({"ok": True, "message": "已提交; RD-Agent-Quant 每轮约 20-40 分钟(LLM+docker回测), 完成后本页自动刷新", "request": req})
 
 
 @app.route("/trade")

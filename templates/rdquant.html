@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>RD-Agent-Quant · quantinvest</title>
+<link rel="stylesheet" href="/static/style.css"/>
+<style>
+  .wrap{max-width:1000px;margin:0 auto;padding:16px}
+  .hd{font-size:21px;font-weight:700;margin:6px 0 2px}
+  .upd{color:#64748b;font-size:12px}
+  .card{background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:12px 14px;margin-bottom:14px}
+  table{border-collapse:collapse;width:100%;font-size:12.5px;margin-top:6px}
+  th,td{border:1px solid #1e293b;padding:5px 9px;text-align:right}
+  th:first-child,td:first-child{text-align:left}
+  th{background:#111827;color:#94a3b8;font-weight:600}
+  .btn{background:#1d4ed8;color:#fff;border:0;border-radius:8px;padding:9px 18px;font-size:14px;font-weight:600;cursor:pointer}
+  .btn:hover{background:#2563eb} .btn:disabled{background:#475569;cursor:not-allowed}
+  .opt{color:#94a3b8;font-size:12px;margin:0 8px}.opt input{background:#0b1220;color:#e2e8f0;border:1px solid #334155;border-radius:5px;padding:3px 6px;width:50px}
+  .msg{margin-top:8px;font-size:12.5px;color:#fbbf24}
+  .pos{color:#34d399}.neg{color:#f87171}
+  .note{background:#1a2433;border:1px solid #2a4a6a;border-radius:8px;padding:10px 13px;color:#cbd5e1;font-size:12.5px;line-height:1.7;margin-top:12px}
+  pre{background:#0b1220;border:1px solid #1e293b;border-radius:6px;padding:8px;font-size:11px;color:#94a3b8;max-height:200px;overflow:auto;white-space:pre-wrap}
+</style>
+</head>
+<body>
+  <nav class="topnav">
+    <a href="/">K线浏览</a><a href="/watchlist">自选股</a><a href="/screen">选股</a><a href="/pattern">杯柄形态</a>
+    <a href="/rdagent">RD-Agent因子</a><a href="/alphagen">AlphaGen挖掘</a><a href="/rdquant" class="active">RD-Agent-Quant</a><a href="/backtest">回测对比</a><a href="/strategy">单票策略</a>
+    <a href="/advisor">策略顾问</a><a href="/advisor-pro">策略顾问Pro</a><a href="/trade">下单执行</a><a href="/track">实盘跟踪</a>
+    <a href="/research">研究台</a><a href="/runup">业绩抢跑</a><a href="/rsrs">RSRS择时</a><a href="/intraday">日内择时</a><a href="/tradingagents">TradingAgents分析</a>
+  </nav>
+  <details class="usage"><summary>ℹ️ 这个页面怎么用</summary><div>RD-Agent-Quant(rdagent fin_quant): LLM多agent <b>联合优化因子+模型</b>——自动提假设→写因子/模型代码→qlib docker回测→看指标→迭代。点「🚀开始优化」→PC上跑(<b>LLM+docker, 每轮约20-40分钟</b>)→逐轮回测指标(IC/ICIR/年化/信息比/回撤)显示在下方。<span class="w">注意</span>:与你三腿生产无关, 是研究探索; 产出的因子仍需过我们的对冲关卡+对base正交性检验才谈落地。</div></details>
+  <div class="wrap">
+    <div class="hd">🤖 RD-Agent-Quant · 因子+模型联合优化</div>
+    <div class="upd" id="upd">—</div>
+    <div class="card">
+      <button class="btn" id="run" onclick="runIt()">🚀 开始优化</button>
+      <span class="opt">迭代轮数 <input id="loop" type="number" value="2"></span>
+      <div class="msg" id="msg"></div>
+    </div>
+    <div id="content">加载中…</div>
+  </div>
+<script>
+function cls(x){return x>=0?'pos':'neg';}
+function load(){
+  fetch("/api/rdquant").then(r=>r.json()).then(d=>{
+    document.getElementById("upd").textContent=(d.updated?("更新 "+d.updated):"")+(d.pending?" · ⏳ PC运行中…":"")+(d.status?(" · "+d.status):"");
+    const b=document.getElementById("run"); b.disabled=!!d.pending; b.textContent=d.pending?"⏳ 优化中(LLM+docker)…":"🚀 开始优化";
+    let h="";
+    if((!d.loops||!d.loops.length)){ h=`<div class="card">${d.message||"暂无结果"}</div>`; }
+    else{
+      h+=`<div class="card"><b>逐轮 qlib 回测指标</b><table><thead><tr><th>轮</th><th>IC</th><th>ICIR</th><th>年化收益</th><th>信息比IR</th><th>最大回撤</th><th>因子/模型</th></tr></thead><tbody>`;
+      h+=d.loops.map(L=>`<tr><td>${L.loop}</td><td class="${cls(L.ic||0)}">${L.ic??'-'}</td><td>${L.icir??'-'}</td>
+        <td class="${cls(L.annual||0)}">${L.annual!=null?(L.annual*100).toFixed(1)+'%':'-'}</td><td>${L.ir??'-'}</td>
+        <td class="neg">${L.mdd!=null?(L.mdd*100).toFixed(1)+'%':'-'}</td><td style="text-align:left">${L.desc||''}</td></tr>`).join("");
+      h+=`</tbody></table></div>`;
+      if(d.log) h+=`<div class="card"><b>运行日志(尾部)</b><pre>${d.log}</pre></div>`;
+    }
+    document.getElementById("content").innerHTML=h;
+  }).catch(e=>{document.getElementById("content").innerHTML="加载失败: "+e;});
+}
+function runIt(){
+  document.getElementById("msg").textContent="提交中…";
+  fetch("/api/rdquant/run",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({loop_n:+document.getElementById("loop").value})})
+    .then(r=>r.json()).then(d=>{document.getElementById("msg").textContent=d.message||"";load();})
+    .catch(e=>{document.getElementById("msg").textContent="提交失败: "+e;});
+}
+load(); setInterval(load,30000);
+</script>
+</body>
+</html>
