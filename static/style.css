@@ -129,3 +129,12 @@ footer {
 .spacer { flex: 1; }
 footer a { color: #38bdf8; text-decoration: none; }
 footer a:hover { text-decoration: underline; }
+
+/* 页面用法说明折叠面板 (各页顶部) */
+details.usage{max-width:1000px;margin:10px auto 0;background:#0f172a;border:1px solid #1e3a5f;border-radius:8px;padding:6px 12px;color:#cbd5e1;font-size:12.5px;line-height:1.75}
+details.usage summary{cursor:pointer;color:#7dd3fc;font-weight:600;font-size:13px;user-select:none;outline:none}
+details.usage summary:hover{color:#bae6fd}
+details.usage[open] summary{margin-bottom:6px}
+details.usage b{color:#e2e8f0}
+details.usage .k{color:#34d399}
+details.usage .w{color:#fbbf24}
