@@ -55,6 +55,14 @@ function load(){
         <td class="${cls(L.annual||0)}">${L.annual!=null?(L.annual*100).toFixed(1)+'%':'-'}</td><td>${L.ir??'-'}</td>
         <td class="neg">${L.mdd!=null?(L.mdd*100).toFixed(1)+'%':'-'}</td><td style="text-align:left">${L.desc||''}</td></tr>`).join("");
       h+=`</tbody></table></div>`;
+      const fs=d.factor_screen;
+      if(fs&&fs.factors&&fs.factors.length){
+        h+=`<div class="card"><b>产出因子 筛 against 饱和base &nbsp;过关 <span class="${fs.n_pass>0?'pos':'neg'}">${fs.n_pass}/${fs.factors.length}</span></b>
+          <table><thead><tr><th>因子</th><th>ic60</th><th>gain</th><th>maxcorr</th><th>冗余于</th></tr></thead><tbody>`;
+        h+=fs.factors.map(a=>`<tr><td style="text-align:left">${a.pass?'✅ ':''}${a.factor}</td><td class="${cls(a.ic60||0)}">${a.ic60}</td>
+          <td class="${a.pass?'pos':''}">${(a.gain>=0?'+':'')+a.gain}</td><td>${a.maxcorr}</td><td style="color:#94a3b8">${a.redundant_with||'-'}</td></tr>`).join("");
+        h+=`</tbody></table><div style="color:#64748b;font-size:11px;margin-top:4px">过关=gain&gt;0.003且maxcorr&lt;0.5(对你三腿base有正交增量);否则=被base吸收</div></div>`;
+      }
       if(d.log) h+=`<div class="card"><b>运行日志(尾部)</b><pre>${d.log}</pre></div>`;
     }
     document.getElementById("content").innerHTML=h;
