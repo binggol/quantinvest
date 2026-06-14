@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>打新提醒 · quantinvest</title>
+<link rel="stylesheet" href="/static/style.css"/>
+<style>
+  .wrap{max-width:1000px;margin:0 auto;padding:16px}
+  .hd{font-size:21px;font-weight:700;margin:6px 0 2px}
+  .sub{color:#94a3b8;line-height:1.7;margin-bottom:14px;font-size:13px}
+  .upd{color:#64748b;font-size:12px}
+  .card{background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:12px 14px;margin-bottom:14px}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{border:1px solid #1e293b;padding:6px 9px;text-align:right}
+  th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}
+  th{background:#111827;color:#94a3b8;font-weight:600}
+  .buy h3{color:#34d399}.soon h3{color:#fbbf24}.listed h3{color:#60a5fa}
+  .subcode{font-family:monospace;color:#34d399;font-weight:700}
+  .board{font-size:11px;padding:1px 7px;border-radius:10px;background:#1e293b;color:#cbd5e1}
+  .empty{color:#94a3b8;padding:10px;font-size:13px}
+  .note{background:#1a2433;border:1px solid #2a4a6a;border-radius:8px;padding:10px 13px;color:#cbd5e1;font-size:12.5px;line-height:1.7;margin-top:12px}
+  .warn{color:#fbbf24}
+</style>
+</head>
+<body>
+  <nav class="topnav">
+    <a href="/">K线浏览</a><a href="/watchlist">自选股</a><a href="/screen">选股</a><a href="/pattern">杯柄形态</a>
+    <a href="/rdagent">RD-Agent因子</a><a href="/alphagen">AlphaGen挖掘</a><a href="/rdquant">RD-Agent-Quant</a><a href="/backtest">回测对比</a><a href="/strategy">单票策略</a>
+    <a href="/advisor-pro">策略顾问Pro</a><a href="/portfolio">组合配置</a><a href="/trade">下单执行</a><a href="/track">实盘跟踪</a>
+    <a href="/research">研究台</a><a href="/runup">业绩抢跑</a><a href="/repo">回购腿</a><a href="/ipo" class="active">打新</a><a href="/rsrs">RSRS择时</a><a href="/tradingagents">TradingAgents分析</a>
+  </nav>
+  <details class="usage"><summary>ℹ️ 这个页面怎么用</summary><div>【账户级白捡增厚】打新=逢新必打,运气活、正收益、与组合<b>完全正交</b>。<b>今日可申购</b>的→用申购代码顶格打满(需提前备好沪/深市值底仓,科创/创业板需开通权限),<b>中签后通常首日卖出</b>。近年破发率~0-2%、新股少但单签收益高,散户年化历史~2-8%。不是主力策略,是不漏打白捡的钱。</div></details>
+  <div class="wrap"><div id="content">加载中…</div></div>
+<script>
+function tbl(rows,cols){
+  if(!rows||!rows.length) return '<div class="empty">— 无 —</div>';
+  let h="<table><thead><tr>"+cols.map(c=>`<th>${c[0]}</th>`).join("")+"</tr></thead><tbody>";
+  h+=rows.map(r=>"<tr>"+cols.map(c=>`<td>${c[1](r)}</td>`).join("")+"</tr>").join("");
+  return h+"</tbody></table>";
+}
+fetch("/api/ipo").then(r=>r.json()).then(d=>{
+  let h=`<div class="hd">🎯 打新提醒</div><div class="upd">更新 ${d.updated||"-"} · 今日 ${d.today||"-"}</div><div class="sub">${d.strategy||""}</div>`;
+  const colsBuy=[["申购代码",r=>`<span class="subcode">${r.sub_code}</span>`],["名称",r=>r.name],["板块",r=>`<span class="board">${r.board}</span>`],["发行价",r=>r.price],["发行PE",r=>r.pe],["申购日",r=>r.ipo_date],["上市日",r=>r.issue_date]];
+  const colsList=[["代码",r=>r.code],["名称",r=>r.name],["板块",r=>`<span class="board">${r.board}</span>`],["发行价",r=>r.price],["上市日",r=>r.issue_date]];
+  h+=`<div class="card buy"><h3>🟢 今日可申购 (${(d.today_buy||[]).length})</h3>${tbl(d.today_buy,colsBuy)}</div>`;
+  h+=`<div class="card soon"><h3>🟡 即将申购·未来7日 (${(d.soon_buy||[]).length})</h3>${tbl(d.soon_buy,colsBuy)}</div>`;
+  h+=`<div class="card listed"><h3>🔵 近期上市·中签了记得卖 (${(d.just_listed||[]).length})</h3>${tbl(d.just_listed,colsList)}</div>`;
+  if(d.note) h+=`<div class="note"><span class="warn">⚠️ </span>${d.note}</div>`;
+  document.getElementById("content").innerHTML=h;
+}).catch(e=>{document.getElementById("content").innerHTML="加载失败: "+e;});
+</script>
+</body>
+</html>
