@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>组合配置 · quantinvest</title>
+<link rel="stylesheet" href="/static/style.css"/>
+<style>
+  .wrap{max-width:1000px;margin:0 auto;padding:16px}
+  .hd{font-size:21px;font-weight:700;margin:6px 0 2px}
+  .sub{color:#94a3b8;line-height:1.7;margin-bottom:14px;font-size:13px}
+  .upd{color:#64748b;font-size:12px}
+  .card{background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:14px 16px;margin-bottom:14px}
+  table{border-collapse:collapse;width:100%;font-size:13px}
+  th,td{border:1px solid #1e293b;padding:6px 10px;text-align:right}
+  th:first-child,td:first-child{text-align:left}
+  th{background:#111827;color:#94a3b8;font-weight:600}
+  .big{font-size:30px;font-weight:800;color:#34d399}
+  .wt{color:#7dd3fc;font-weight:700}
+  .pos{color:#34d399}.neg{color:#f87171}
+  .note{background:#1a2433;border:1px solid #2a4a6a;border-radius:8px;padding:10px 13px;color:#cbd5e1;font-size:12.5px;line-height:1.7;margin-top:12px}
+  .warn{color:#fbbf24}
+  .ov{background:#13203a;border:1px solid #2a4a6a;border-radius:8px;padding:10px 13px;margin-top:10px;font-size:13px}
+</style>
+</head>
+<body>
+  <nav class="topnav">
+    <a href="/">K线浏览</a><a href="/watchlist">自选股</a><a href="/screen">选股</a><a href="/pattern">杯柄形态</a>
+    <a href="/rdagent">RD-Agent因子</a><a href="/alphagen">AlphaGen挖掘</a><a href="/rdquant">RD-Agent-Quant</a><a href="/backtest">回测对比</a><a href="/strategy">单票策略</a>
+    <a href="/advisor-pro">策略顾问Pro</a><a href="/portfolio" class="active">组合配置</a><a href="/trade">下单执行</a><a href="/track">实盘跟踪</a>
+    <a href="/research">研究台</a><a href="/runup">业绩抢跑</a><a href="/repo">回购腿</a><a href="/rsrs">RSRS择时</a><a href="/tradingagents">TradingAgents分析</a>
+  </nav>
+  <details class="usage"><summary>ℹ️ 这个页面怎么用</summary><div>整本策略书一览:<b>四腿市场中性组合</b>(主300季频对冲 + 抢跑/PEAD/回购 三条事件腿)的<b>权重、各腿夏普、两两相关、合并夏普</b>。核心是<b>近零相关</b>(G-K广度)——各腿独立下注,合起来夏普≈2.3。RSRS是<b>独立方向择时overlay</b>(给指数/ETF仓位用,不并入中性book)。按此权重分配你的中性资金。</div></details>
+  <div class="wrap"><div id="content">加载中…</div></div>
+<script>
+function pct(x){return x==null?'-':(x*100).toFixed(1)+'%';}
+fetch("/api/portfolio").then(r=>r.json()).then(d=>{
+  if(!d.sleeves||!d.sleeves.length){document.getElementById("content").innerHTML=`<div class="card">${d.message||"暂无数据"}</div>`;return;}
+  let h=`<div class="hd">📦 组合配置 · 四腿市场中性Book</div><div class="upd">更新 ${d.updated||"-"} · 共同回测 ${d.common_months||0} 月</div>`;
+  h+=`<div class="sub">${d.strategy||""}</div>`;
+  const c=d.combined||{};
+  h+=`<div class="card" style="text-align:center"><div style="color:#94a3b8;font-size:13px">合并夏普(${c.weights||""})</div>
+      <div class="big">${c.sharpe??'-'}</div>
+      <div style="color:#94a3b8;font-size:12px">年化 ${pct(c.ann)} · 最大回撤 ${pct(c.mdd)}</div></div>`;
+  h+=`<div class="card"><b>各腿配置</b><table><thead><tr><th>腿</th><th>权重</th><th>夏普</th><th>年化</th><th>最大回撤</th></tr></thead><tbody>`;
+  h+=d.sleeves.map(s=>`<tr><td>${s.name}</td><td class="wt">${(s.weight*100).toFixed(0)}%</td><td>${s.sharpe}</td><td class="${s.ann>=0?'pos':'neg'}">${pct(s.ann)}</td><td class="neg">${pct(s.mdd)}</td></tr>`).join("");
+  h+=`</tbody></table></div>`;
+  if(d.corr){
+    const ks=Object.keys(d.corr);
+    h+=`<div class="card"><b>两两相关性(近零=好)</b><table><thead><tr><th></th>${ks.map(k=>`<th>${k}</th>`).join("")}</tr></thead><tbody>`;
+    h+=ks.map(a=>`<tr><td>${a}</td>${ks.map(b=>{const v=d.corr[a][b];const col=a===b?'#64748b':(Math.abs(v)<0.3?'#34d399':'#fbbf24');return `<td style="color:${col}">${v}</td>`;}).join("")}</tr>`).join("");
+    h+=`</tbody></table></div>`;
+  }
+  if(d.rsrs_overlay&&d.rsrs_overlay.length){
+    h+=`<div class="ov"><b>🧭 RSRS 方向择时 overlay</b>(独立, 不并入中性book, 给指数/ETF仓位): `+
+       d.rsrs_overlay.map(x=>`${x.name} <b style="color:${x.state==='持有'?'#34d399':'#f87171'}">${x.state}</b>(${x.score})`).join(" · ")+`</div>`;
+  }
+  if(d.note) h+=`<div class="note"><span class="warn">⚠️ </span>${d.note}</div>`;
+  document.getElementById("content").innerHTML=h;
+}).catch(e=>{document.getElementById("content").innerHTML="加载失败: "+e;});
+</script>
+</body>
+</html>
