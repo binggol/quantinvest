@@ -59,6 +59,7 @@ ALPHAGEN_RESULT = PREDICT_JSON.parent / "alphagen_result.json"  # AlphaGen RL挖
 ALPHAGEN_REQUEST = PREDICT_JSON.parent / "alphagen_request.json"  # 网页按钮触发: PC GPU上跑挖掘+评估
 RDQUANT_RESULT = PREDICT_JSON.parent / "rdquant_result.json"  # RD-Agent-Quant(fin_quant)因子+模型联合优化 逐轮回测指标 (PC pc_listener.py 写)
 RDQUANT_REQUEST = PREDICT_JSON.parent / "rdquant_request.json"  # 网页按钮触发: PC 上 rdagent fin_quant
+RDAGENT_SCREEN = PREDICT_JSON.parent / "rdagent_screen.json"  # RD-Agent因子 对饱和base的正交性筛 (PC factor_rdagent_screen.py 写)
 WATCHLIST_JSON = Path(STOCK_META_DB).parent / "watchlist.json"  # 自选股 (持久卷 /app/data)
 TUSHARE_TOKEN = os.environ.get("TUSHARE_TOKEN", "")
 DAILY_HOUR = int(os.environ.get("DAILY_UPDATE_HOUR", "21"))
@@ -1514,6 +1515,14 @@ def api_alphagen_run():
     ALPHAGEN_REQUEST.parent.mkdir(parents=True, exist_ok=True)
     ALPHAGEN_REQUEST.write_text(json.dumps(req, ensure_ascii=False), encoding="utf-8")
     return jsonify({"ok": True, "message": "已提交挖掘任务; PC GPU 训练约 30-60 分钟, 完成后本页自动刷新结果", "request": req})
+
+
+@app.route("/api/rdagent_screen")
+def api_rdagent_screen():
+    data = _read_json(RDAGENT_SCREEN)
+    if data is None:
+        return jsonify({"factors": [], "n_pass": 0, "message": "尚无筛结果; PC 端运行 factor_rdagent_screen.py"})
+    return jsonify(data)
 
 
 @app.route("/rdquant")

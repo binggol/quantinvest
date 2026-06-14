@@ -32,7 +32,33 @@
   </nav>
   <details class="usage"><summary>ℹ️ 这个页面怎么用</summary><div>因子挖掘结果与历史买入清单。<span class="w">提醒</span>:大规模挖掘已证多数因子对组合无正交增量(近乎0赢家),此页主要是研究记录,<b>别盲信单因子</b>。</div></details>
   <div class="meta" id="meta">RD-Agent 挖掘的有效因子 + 据此预测的下一交易日买入清单 (仅研究参考)</div>
+  <details id="ortho-box" style="max-width:1100px;margin:8px auto 0;background:#0f172a;border:1px solid #1e3a5f;border-radius:8px;padding:6px 12px;color:#cbd5e1;font-size:12px">
+    <summary style="cursor:pointer;color:#7dd3fc;font-weight:600">🔬 对三腿base的正交性筛(挖出的因子真给组合加东西吗) <span id="ortho-sum"></span></summary>
+    <div id="ortho-body" style="margin-top:6px">加载中…</div>
+  </details>
 </header>
+<script>
+fetch("/api/rdagent_screen").then(r=>r.json()).then(d=>{
+  const np=d.n_pass||0, n=(d.factors||[]).length;
+  document.getElementById("ortho-sum").innerHTML = n? `— 过关 <b style="color:${np>0?'#34d399':'#f87171'}">${np}/${n}</b>${d.distinct_total?` (共${d.distinct_total}个不同因子)`:''}` : "";
+  let h="";
+  if(!n){ h=d.message||"暂无"; }
+  else{
+    h=`<div style="color:#94a3b8;margin-bottom:4px">过关=gain&gt;0.003 且 maxcorr&lt;0.5(对base有正交增量);否则=被低波动/换手/套牢盘簇吸收。base_ic=${d.base_ic}</div>`;
+    h+=`<table style="border-collapse:collapse;width:100%;font-size:11.5px"><thead><tr style="color:#94a3b8">
+      <th style="text-align:left;border:1px solid #1e293b;padding:3px 7px">因子</th><th style="border:1px solid #1e293b;padding:3px 7px">ic60</th>
+      <th style="border:1px solid #1e293b;padding:3px 7px">gain</th><th style="border:1px solid #1e293b;padding:3px 7px">maxcorr</th>
+      <th style="border:1px solid #1e293b;padding:3px 7px">冗余于</th></tr></thead><tbody>`;
+    h+=(d.factors||[]).map(a=>`<tr><td style="border:1px solid #1e293b;padding:3px 7px">${a.pass?'✅ ':''}${a.factor}</td>
+      <td style="border:1px solid #1e293b;padding:3px 7px;text-align:right">${a.ic60}</td>
+      <td style="border:1px solid #1e293b;padding:3px 7px;text-align:right;color:${a.pass?'#34d399':'#94a3b8'}">${(a.gain>=0?'+':'')+a.gain}</td>
+      <td style="border:1px solid #1e293b;padding:3px 7px;text-align:right">${a.maxcorr}</td>
+      <td style="border:1px solid #1e293b;padding:3px 7px;color:#94a3b8">${a.redundant_with||'-'}</td></tr>`).join("");
+    h+="</tbody></table>";
+  }
+  document.getElementById("ortho-body").innerHTML=h;
+}).catch(e=>{document.getElementById("ortho-body").innerHTML="加载失败";});
+</script>
 
 <div class="screen-layout">
   <aside class="screen-side">
