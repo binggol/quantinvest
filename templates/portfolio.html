@@ -31,7 +31,23 @@
     <a href="/research">研究台</a><a href="/runup">业绩抢跑</a><a href="/repo">回购腿</a><a href="/rsrs">RSRS择时</a><a href="/tradingagents">TradingAgents分析</a>
   </nav>
   <details class="usage"><summary>ℹ️ 这个页面怎么用</summary><div>整本策略书一览:<b>四腿市场中性组合</b>(主300季频对冲 + 抢跑/PEAD/回购 三条事件腿)的<b>权重、各腿夏普、两两相关、合并夏普</b>。核心是<b>近零相关</b>(G-K广度)——各腿独立下注,合起来夏普≈2.3。RSRS是<b>独立方向择时overlay</b>(给指数/ETF仓位用,不并入中性book)。按此权重分配你的中性资金。</div></details>
-  <div class="wrap"><div id="content">加载中…</div></div>
+  <div class="wrap">
+    <div class="card" style="border-color:#2a4a6a;background:#13203a">
+      <div style="font-size:16px;font-weight:700;color:#7dd3fc;margin-bottom:8px">📖 生产体系操作指南(一页看全)</div>
+      <table style="border:none">
+        <tr><td style="border:none;color:#34d399;font-weight:700;white-space:nowrap;vertical-align:top">① 中性资金</td>
+            <td style="border:none">按下方权重分四腿:<b>主300 60% / 回购 20% / 抢跑 10% / PEAD 10%</b>(合并夏~2.34)。牛熊都赚、与市场涨跌无关。</td></tr>
+        <tr><td style="border:none;color:#fbbf24;font-weight:700;white-space:nowrap;vertical-align:top">② 方向资金</td>
+            <td style="border:none">看 <a href="/rsrs" style="color:#7dd3fc">/rsrs</a>:🟢绿灯=满仓对应指数ETF、🔴红灯=空仓现金。独立overlay,翻转邮件来才次日开盘调仓。</td></tr>
+        <tr><td style="border:none;color:#60a5fa;font-weight:700;white-space:nowrap;vertical-align:top">③ 每日操作</td>
+            <td style="border:none"><a href="/trade" style="color:#7dd3fc">/trade</a> 主腿季频调仓 · <a href="/repo" style="color:#7dd3fc">/repo</a> 回购建仓 · <a href="/runup" style="color:#7dd3fc">/runup</a> 抢跑清单。<b>有动作才发邮件</b>,平时不用管;下单自查停牌/涨停。</td></tr>
+        <tr><td style="border:none;color:#a78bfa;font-weight:700;white-space:nowrap;vertical-align:top">④ 研究平台</td>
+            <td style="border:none"><a href="/alphagen" style="color:#7dd3fc">/alphagen</a>·<a href="/rdquant" style="color:#7dd3fc">/rdquant</a>·<a href="/rdagent" style="color:#7dd3fc">/rdagent</a> 任何挖的因子<b>自动过正交关卡</b>(已证:公式/RL/标准因子 0增量,被低波动-换手-套牢盘簇吸收)。<a href="/research" style="color:#7dd3fc">/research</a> 记结论防重测。</td></tr>
+        <tr><td style="border:none;color:#94a3b8;font-weight:700;white-space:nowrap;vertical-align:top">核心原理</td>
+            <td style="border:none;color:#cbd5e1">增量来自<b>不相关的赌注(G-K广度)</b>,不是更强的因子。事件腿命中率1/8(回购成),因子挖掘0/200+。剩余增量在执行质量/打新/L2数据。</td></tr>
+      </table>
+    </div>
+    <div id="content">加载中…</div></div>
 <script>
 function pct(x){return x==null?'-':(x*100).toFixed(1)+'%';}
 fetch("/api/portfolio").then(r=>r.json()).then(d=>{
