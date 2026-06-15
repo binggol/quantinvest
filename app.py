@@ -57,6 +57,7 @@ RUNUP_JSON = PREDICT_JSON.parent / "runup.json"  # 抢跑第二sleeve: 每日预
 REPO_JSON = PREDICT_JSON.parent / "repo.json"  # 回购第四sleeve: 回购公告后持有60日 每日清单 (PC export_repo.py 写)
 COMBO_JSON = PREDICT_JSON.parent / "combo.json"  # 组合配置: 四腿中性book权重+各腿夏普+相关+合并 (PC export_combo.py 写)
 IPO_JSON = PREDICT_JSON.parent / "ipo.json"  # 打新提醒: 今日可申购/即将/近期上市 (PC export_ipo.py 写)
+KOREA_SEMI_JSON = PREDICT_JSON.parent / "korea_semi.json"  # 海力士映射: 海力士涨>2%→A股半导体持1天 (PC export_korea_semi.py 写)
 RSRS_JSON = PREDICT_JSON.parent / "rsrs.json"  # RSRS指数择时(独立方向信号, 不并入三腿中性组合) (PC export_rsrs.py 写)
 ALPHAGEN_RESULT = PREDICT_JSON.parent / "alphagen_result.json"  # AlphaGen RL挖掘的alpha池 + 对base筛结果 (PC alphagen_listener.py 写)
 ALPHAGEN_REQUEST = PREDICT_JSON.parent / "alphagen_request.json"  # 网页按钮触发: PC GPU上跑挖掘+评估
@@ -1566,6 +1567,20 @@ def api_portfolio():
     data = _read_json(COMBO_JSON)
     if data is None:
         return jsonify({"sleeves": [], "message": "尚无组合数据; PC 端运行 export_combo.py 生成 combo.json"})
+    return jsonify(data)
+
+
+@app.route("/chipmap")
+def chipmap_page():
+    """海力士映射: SK海力士涨>2% → 当日尾盘买A股半导体篮子、持1天 (小卫星信号)。"""
+    return render_template("chipmap.html")
+
+
+@app.route("/api/chipmap")
+def api_chipmap():
+    data = _read_json(KOREA_SEMI_JSON)
+    if data is None:
+        return jsonify({"signal": "", "basket": [], "message": "尚无信号; PC 端运行 export_korea_semi.py"})
     return jsonify(data)
 
 
